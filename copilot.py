@@ -3,6 +3,7 @@ import random
 import sys
 import json
 import os
+import math
 from enum import Enum
 
 pygame.init()
@@ -36,6 +37,7 @@ class PowerUpType(Enum):
     SHIELD = 1          # Energy shield
     RAPID_FIRE = 2      # Laser burst
     INVINCIBILITY = 3   # Warp core
+    ORBITAL = 4         # Deployable orbital satellites
 
 # Particle system
 class Particle:
@@ -63,6 +65,12 @@ class Particle:
 
 particles = []
 
+# Background starfield
+NUM_STARS = 80
+stars = []
+for _ in range(NUM_STARS):
+    stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT), random.choice([1, 2]), random.uniform(0.5, 1.8)])
+
 # Sound system (with fallback for missing files)
 def load_sound(filename):
     try:
@@ -74,11 +82,92 @@ def play_sound(sound):
     if sound:
         sound.play()
 
-# Try to load sounds, create dummy if missing
-shoot_sound = load_sound("shoot.wav")
-hit_sound = load_sound("hit.wav")
-powerup_sound = load_sound("powerup.wav")
-bg_music = load_sound("background.wav")
+# Audio setup: auto-detect audio files and map them to roles
+shoot_sound = None
+hit_sound = None
+powerup_sound = None
+rapid_fire_sound = None
+shield_sound = None
+warp_sound = None
+orbital_sound = None
+cutter_sound = None
+bg_music_file = None
+audio_files = [f for f in os.listdir('.') if f.lower().endswith(('.mp3', '.wav', '.ogg'))]
+if audio_files:
+    # choose background music (prefer files with "background", "bg", or "music" in the name)
+    for f in audio_files:
+        if any(k in f.lower() for k in ('background', 'bg', 'music', 'ambient')):
+            bg_music_file = f
+            break
+    if not bg_music_file:
+        # fallback to the first file
+        bg_music_file = audio_files[0]
+
+    # try loading background music via mixer.music (streaming)
+    try:
+        pygame.mixer.music.load(bg_music_file)
+        pygame.mixer.music.set_volume(0.25)
+        pygame.mixer.music.play(-1)
+    except Exception:
+        bg_music_file = None
+
+    def pick_file(keywords, exclude=None):
+        for f in audio_files:
+            if exclude and f == exclude:
+                continue
+            lname = f.lower()
+            if any(k in lname for k in keywords):
+                return f
+        return None
+
+    # map common roles to files
+    shoot_candidate = pick_file(('laser', 'shoot', 'gun', 'pew', 'zap'))
+    hit_candidate = pick_file(('hit', 'explode', 'explosion', 'boom', 'impact'), exclude=bg_music_file)
+    powerup_candidate = pick_file(('powerup', 'power', 'pickup', 'collect', 'ping'), exclude=bg_music_file)
+    rapid_candidate = pick_file(('burst', 'rapid', 'auto', 'blip'), exclude=bg_music_file)
+    orbital_candidate = pick_file(('orbital', 'orb', 'satellite', 'deploy', 'launch'), exclude=bg_music_file)
+    cutter_candidate = pick_file(('cutter', 'cut', 'slice'), exclude=bg_music_file)
+
+    # fallback selections
+    if not shoot_candidate:
+        shoot_candidate = pick_file(('laser', 'shoot', 'gun')) or (audio_files[0] if audio_files else None)
+    if not hit_candidate:
+        hit_candidate = pick_file(('explode', 'hit'))
+    if not powerup_candidate:
+        powerup_candidate = pick_file(('powerup', 'pickup', 'ping'))
+        # specific power-up sounds (shield/warp)
+        shield_candidate = pick_file(('shield', 'sheild'), exclude=bg_music_file)
+        warp_candidate = pick_file(('warp', 'invinc', 'invulnerability'), exclude=bg_music_file)
+    if not rapid_candidate:
+        rapid_candidate = pick_file(('burst', 'rapid'))
+
+    # load sounds (use load_sound which handles exceptions)
+    if shoot_candidate:
+        shoot_sound = load_sound(shoot_candidate)
+    if hit_candidate:
+        hit_sound = load_sound(hit_candidate)
+    if powerup_candidate:
+        powerup_sound = load_sound(powerup_candidate)
+    if shield_candidate:
+        shield_sound = load_sound(shield_candidate)
+    else:
+        shield_sound = None
+    if warp_candidate:
+        warp_sound = load_sound(warp_candidate)
+    else:
+        warp_sound = None
+    if rapid_candidate:
+        rapid_fire_sound = load_sound(rapid_candidate)
+    else:
+        rapid_fire_sound = None
+    if orbital_candidate:
+        orbital_sound = load_sound(orbital_candidate)
+    else:
+        orbital_sound = None
+    if cutter_candidate:
+        cutter_sound = load_sound(cutter_candidate)
+    else:
+        cutter_sound = None
 
 # High score management
 SCORE_FILE = "highscore.json"
@@ -107,6 +196,22 @@ player_invincible_time = 0
 rapid_fire = False
 rapid_fire_time = 0
 rapid_fire_counter = 0
+orbital_count = 0
+orbital_charging = False
+orbital_charge_duration = 12.0  # 12 seconds to charge
+orbital_charge_time = 0.0
+orbital_beam_active = False
+orbital_beam_duration = 2.0  # beam lasts 2 seconds
+orbital_beam_time = 0.0
+orbital_beam_width = 80  # beam width in pixels
+# Overdrive (non-pickup ability) - charges by kills
+kill_counter = 0
+charge_threshold = 50
+ability_charged = False
+overdrive_active = False
+overdrive_duration = 10.0
+overdrive_time = 0.0
+score_multiplier = 1
 
 # Enemy setup
 class Enemy:
@@ -150,9 +255,12 @@ class PowerUp:
         elif self.type == PowerUpType.RAPID_FIRE:
             pygame.draw.rect(surface, NEON_GREEN, self.rect)
             pygame.draw.line(surface, CYAN, self.rect.topleft, self.rect.bottomright, 2)
-        else:  # INVINCIBILITY
+        elif self.type == PowerUpType.INVINCIBILITY:
             pygame.draw.rect(surface, NEON_PINK, self.rect)
             pygame.draw.circle(surface, NEON_PINK, self.rect.center, 12, 2)
+        elif self.type == PowerUpType.ORBITAL:
+            pygame.draw.rect(surface, (255,160,0), self.rect)
+            pygame.draw.circle(surface, (255,220,120), self.rect.center, 8, 2)
 
 powerups = []
 
@@ -185,10 +293,17 @@ def draw_window():
     
     screen.fill(BLACK_SPACE)
     
-    # Draw stars in background
-    for i in range(10):
-        star_x = (int(score / 10) + i * 60) % WIDTH
-        pygame.draw.circle(screen, WHITE, (star_x, 20 + (i % 5) * 60), 1)
+    # Draw and update starfield (moving downward for parallax)
+    for s in stars:
+        # s = [x, y, size, speed]
+        s[1] += s[3]
+        if s[1] > HEIGHT:
+            s[1] = 0
+            s[0] = random.randint(0, WIDTH)
+            s[2] = random.choice([1, 2])
+            s[3] = random.uniform(0.5, 1.8)
+        color = WHITE if s[2] == 1 else (180, 230, 255)
+        pygame.draw.circle(screen, color, (int(s[0]), int(s[1])), s[2])
     
     # Draw particles
     for particle in particles[:]:
@@ -196,12 +311,25 @@ def draw_window():
     
     # Draw player (starship)
     if player_invincible and int(player_invincible_time * 10) % 2:
-        pygame.draw.polygon(screen, SHIELD_COLOR, [
+        # Draw glowing warp shield around player
+        pygame.draw.circle(screen, NEON_PINK, (player.centerx, player.centery), 60, 2)
+        pygame.draw.circle(screen, NEON_PINK, (player.centerx, player.centery), 50, 1)
+        pygame.draw.polygon(screen, NEON_PINK, [
             (player.centerx, player.top + shake_x),
             (player.right, player.centery + shake_y),
             (player.centerx, player.bottom + shake_x),
             (player.left, player.centery + shake_y)
         ])
+        # Add warp particles around player during invincibility
+        if random.random() < 0.3:
+            particles.append(Particle(
+                player.centerx + random.randint(-40, 40),
+                player.centery + random.randint(-40, 40),
+                random.uniform(-2, 2),
+                random.uniform(-2, 2),
+                lifetime=20,
+                color=NEON_PINK
+            ))
     else:
         pygame.draw.polygon(screen, CYAN, [
             (player.centerx, player.top + shake_x),
@@ -213,6 +341,11 @@ def draw_window():
     if player_shield:
         pygame.draw.circle(screen, SHIELD_COLOR, player.center, 60, 3)
     
+    if orbital_charging and int(orbital_charge_time * 10) % 2:
+        # Draw flashing orange orbital shield during charge-up
+        pygame.draw.circle(screen, (255, 200, 50), (player.centerx, player.centery), 70, 3)
+        pygame.draw.circle(screen, (255, 200, 50), (player.centerx, player.centery), 55, 1)
+    
     # Draw enemies
     for enemy in enemies:
         enemy.draw(screen)
@@ -220,11 +353,36 @@ def draw_window():
     # Draw power-ups
     for powerup in powerups:
         powerup.draw(screen)
+
+    # Draw orbital beam strike if active (cone shape that expands to screen width)
+    if orbital_beam_active:
+        beam_x = player.centerx
+        beam_top = 0
+        beam_bottom = player.top
+        # Cone expands from narrow at player to full screen width at top
+        cone_width_bottom = 40  # narrow at player
+        cone_width_top = WIDTH  # expand to full screen width at top
+        # draw cone as a triangle (opaque white)
+        cone_points = [
+            (beam_x - cone_width_bottom // 2, beam_bottom),
+            (beam_x + cone_width_bottom // 2, beam_bottom),
+            (beam_x + cone_width_top // 2, beam_top),
+            (beam_x - cone_width_top // 2, beam_top)
+        ]
+        pygame.draw.polygon(screen, WHITE, cone_points)
+        # glow effect around cone
+        pygame.draw.polygon(screen, (200, 200, 255), cone_points, 3)
     
     # Draw laser missiles
     for missile in missiles:
-        pygame.draw.line(screen, NEON_GREEN, (missile.centerx, missile.top), (missile.centerx, missile.bottom), 3)
-        pygame.draw.circle(screen, NEON_GREEN, missile.center, 2)
+        if overdrive_active:
+            # Blue and bigger during overdrive
+            pygame.draw.line(screen, (0, 150, 255), (missile.centerx, missile.top), (missile.centerx, missile.bottom), 5)
+            pygame.draw.circle(screen, (0, 150, 255), missile.center, 3)
+        else:
+            # Normal green missiles
+            pygame.draw.line(screen, NEON_GREEN, (missile.centerx, missile.top), (missile.centerx, missile.bottom), 3)
+            pygame.draw.circle(screen, NEON_GREEN, missile.center, 2)
     
     # Draw UI with neon styling
     score_text = font.render(f"SCORE: {score}", True, NEON_GREEN)
@@ -233,6 +391,12 @@ def draw_window():
     screen.blit(score_text, (10, 10))
     screen.blit(lives_text, (WIDTH - 180, 10))
     screen.blit(high_score_text, (WIDTH - 180, 40))
+    # Overdrive charge UI
+    charge_text = small_font.render(f"OVERDRIVE: {kill_counter}/{charge_threshold}", True, NEON_PURPLE)
+    screen.blit(charge_text, (10, 100))
+    if ability_charged:
+        hint_text = small_font.render("Press E to Activate Overdrive", True, (255,200,50))
+        screen.blit(hint_text, (10, HEIGHT - 30))
     
     # Draw power-up timers
     if player_shield:
@@ -246,6 +410,10 @@ def draw_window():
     if player_invincible:
         invincible_text = small_font.render(f"WARP: {player_invincible_time:.1f}s", True, NEON_PINK)
         screen.blit(invincible_text, (10, 80))
+    
+    if orbital_charging:
+        orbital_text = small_font.render(f"CHARGING: {orbital_charge_time:.1f}s", True, (255, 200, 50))
+        screen.blit(orbital_text, (10, 100))
     
     pygame.display.update()
     
@@ -276,7 +444,9 @@ def draw_pause():
 def reset_game():
     global score, lives, enemy_speed, spawn_rate, game_state, high_score
     global player_shield, player_shield_time, player_invincible, player_invincible_time
-    global rapid_fire, rapid_fire_time
+    global rapid_fire, rapid_fire_time, rapid_fire_counter
+    global orbital_count, orbital_beam_active, orbital_charging, orbital_charge_time
+    global kill_counter, ability_charged, overdrive_active, overdrive_time, score_multiplier
     score = 0
     lives = 3
     enemy_speed = 4
@@ -292,18 +462,31 @@ def reset_game():
     player_invincible_time = 0
     rapid_fire = False
     rapid_fire_time = 0
+    rapid_fire_counter = 0
+    orbital_count = 0
+    orbital_charging = False
+    orbital_charge_time = 0
+    orbital_beam_active = False
+    # reset overdrive
+    kill_counter = 0
+    ability_charged = False
+    overdrive_active = False
+    overdrive_time = 0
+    score_multiplier = 1
     game_state = PLAYING
-    if bg_music:
-        bg_music.play(-1)
 
 def main():
     global score, lives, enemy_speed, spawn_rate, game_state, high_score, screen_shake
     global player_shield, player_shield_time, player_invincible, player_invincible_time
     global rapid_fire, rapid_fire_time, rapid_fire_counter
+    global orbital_count, orbital_charging, orbital_charge_duration, orbital_charge_time
+    global orbital_beam_active, orbital_beam_time, orbital_beam_duration, orbital_beam_width
+    # Overdrive globals
+    global kill_counter, charge_threshold, ability_charged
+    global overdrive_active, overdrive_duration, overdrive_time, score_multiplier
     
     running = True
-    if bg_music:
-        bg_music.play(-1)
+    running = True
     
     while running:
         clock.tick(30)
@@ -342,6 +525,15 @@ def main():
                     play_sound(shoot_sound)
                 if event.key == pygame.K_p:
                     game_state = PAUSED
+                if event.key == pygame.K_e:
+                    # Activate Overdrive if charged
+                    if ability_charged and not overdrive_active:
+                        overdrive_active = True
+                        overdrive_time = overdrive_duration
+                        ability_charged = False
+                        kill_counter = 0
+                        score_multiplier = 2
+                        play_sound(globals().get('rapid_fire_sound', None) or globals().get('powerup_sound', None))
         
         # Update power-up timers
         if player_shield:
@@ -361,10 +553,14 @@ def main():
         
         # Player movement
         keys = pygame.key.get_pressed()
-        if keys[pygame.K_LEFT] and player.left > 0:
+        if keys[pygame.K_a] and player.left > 0:
             player.x -= player_speed
-        if keys[pygame.K_RIGHT] and player.right < WIDTH:
+        if keys[pygame.K_d] and player.right < WIDTH:
             player.x += player_speed
+        if keys[pygame.K_w] and player.top > 50:
+            player.y -= player_speed
+        if keys[pygame.K_s] and player.bottom < HEIGHT:
+            player.y += player_speed
         
         # Difficulty scaling
         if score > 0 and score % 10 == 0:
@@ -407,6 +603,12 @@ def main():
                             if score > high_score:
                                 high_score = score
                                 save_high_score(high_score)
+                            # stop orbital sound if charging/active
+                            try:
+                                if globals().get('orbital_sound', None):
+                                    globals()['orbital_sound'].stop()
+                            except Exception:
+                                pass
         
         # Power-up spawning (10% chance when enemy dies)
         # (handled in missile collision below)
@@ -416,22 +618,37 @@ def main():
             rapid_fire_counter += 1
             if rapid_fire_counter >= 3:
                 missiles.append(pygame.Rect(player.centerx - 5, player.top, 10, 20))
-                play_sound(shoot_sound)
+                # play rapid-fire effect if available, else fall back to normal shoot
+                play_sound(rapid_fire_sound if 'rapid_fire_sound' in globals() and rapid_fire_sound else shoot_sound)
                 rapid_fire_counter = 0
         
         # Power-up collection
         for powerup in powerups[:]:
             if powerup.rect.colliderect(player):
-                play_sound(powerup_sound)
+                # Play a sound specific to the power-up type if available
                 if powerup.type == PowerUpType.SHIELD:
+                    play_sound(globals().get('shield_sound', None) or globals().get('powerup_sound', None))
                     player_shield = True
                     player_shield_time = 5
                 elif powerup.type == PowerUpType.RAPID_FIRE:
+                    # play a short rapid-fire pickup sound if available
+                    play_sound(globals().get('rapid_fire_sound', None) or globals().get('powerup_sound', None))
                     rapid_fire = True
                     rapid_fire_time = 8
                 elif powerup.type == PowerUpType.INVINCIBILITY:
+                    play_sound(globals().get('warp_sound', None) or globals().get('powerup_sound', None))
                     player_invincible = True
                     player_invincible_time = 5
+                elif powerup.type == PowerUpType.ORBITAL:
+                    # collect an orbital satellite and start charging
+                    play_sound(globals().get('orbital_sound', None) or globals().get('powerup_sound', None))
+                    orbital_count += 1
+                    orbital_charging = True
+                    orbital_charge_time = orbital_charge_duration
+                    # Make the orbital shield behave like warp: invincible during charge and beam
+                    player_invincible = True
+                    # total invincibility covers charge duration + beam duration
+                    player_invincible_time = orbital_charge_duration + orbital_beam_duration
                 powerups.remove(powerup)
         
         # Missile movement
@@ -443,7 +660,7 @@ def main():
                 hit = False
                 for enemy in enemies[:]:
                     if missile.colliderect(enemy.rect):
-                        enemy.health -= 1
+                        enemy.health -= (2 if overdrive_active else 1)
                         
                         # Explosion particles
                         for _ in range(10):
@@ -452,12 +669,22 @@ def main():
                         
                         if enemy.health <= 0:
                             enemies.remove(enemy)
-                            score += 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
-                            
+                            # Count kill and apply score (overdrive doubles score via multiplier)
+                            base_score = 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
+                            score += base_score * (2 if overdrive_active else 1)
+                            # increment kill counter for overdrive charge
+                            try:
+                                kill_counter += 1
+                                if not ability_charged and kill_counter >= charge_threshold:
+                                    ability_charged = True
+                                    play_sound(globals().get('rapid_fire_sound', None) or globals().get('powerup_sound', None))
+                            except Exception:
+                                pass
+
                             # Power-up drop
                             if random.random() < 0.15:
-                                powerup_type = random.choices([PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY],
-                                                             weights=[40, 35, 25])[0]
+                                powerup_type = random.choices([PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL],
+                                                             weights=[35, 30, 20, 15])[0]
                                 powerups.append(PowerUp(enemy.rect.centerx, enemy.rect.centery, powerup_type))
                         
                         if missile in missiles:
@@ -469,6 +696,92 @@ def main():
         for particle in particles[:]:
             if not particle.update():
                 particles.remove(particle)
+        
+        # Update orbitals (charging then beam)
+        if orbital_charging:
+            orbital_charge_time -= 1/30
+            if orbital_charge_time <= 0:
+                # charge finished, activate the beam
+                orbital_charging = False
+                orbital_beam_active = True
+                orbital_beam_time = orbital_beam_duration
+                # Make sure player remains invincible during the beam (like warp)
+                player_invincible = True
+                # ensure at least beam duration remains (don't cut off any charge-time left)
+                player_invincible_time = max(player_invincible_time, orbital_beam_duration)
+                # Spawn multiple enemies during orbital strike
+                for _ in range(8):
+                    enemy_type = random.choices([EnemyType.DRONE, EnemyType.FIGHTER, EnemyType.CAPITAL], weights=[50, 35, 15])[0]
+                    x = random.randint(0, WIDTH - 40)
+                    enemies.append(Enemy(x, -40, enemy_type))
+        
+        # Update orbitals (beam collision)
+        if orbital_beam_active:
+            orbital_beam_time -= 1/30
+            # check collisions between beam and enemies (using cone polygon)
+            cone_width_bottom = 40
+            cone_width_top = WIDTH
+            cone_points = [
+                (player.centerx - cone_width_bottom // 2, player.top),
+                (player.centerx + cone_width_bottom // 2, player.top),
+                (player.centerx + cone_width_top // 2, 0),
+                (player.centerx - cone_width_top // 2, 0)
+            ]
+            beam_polygon = pygame.draw.polygon(pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA), (255, 255, 255, 0), cone_points)
+            enemies_hit = []
+            for enemy in enemies[:]:
+                # Check if enemy center is within the cone bounds
+                # Simple approach: check if enemy is within expanding cone
+                beam_rect = pygame.Rect(player.centerx - cone_width_bottom//2, 0, cone_width_bottom, player.top)
+                if beam_rect.colliderect(enemy.rect):
+                    enemies_hit.append(enemy)
+                    for _ in range(15):
+                        particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(255,255,255)))
+                    score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)) * (2 if overdrive_active else 1)
+                else:
+                    # More precise cone collision: check if enemy is within expanding cone
+                    enemy_y = enemy.rect.centery
+                    if 0 <= enemy_y <= player.top:
+                        # Calculate cone width at enemy's y position
+                        progress = 1 - (enemy_y / player.top)  # 0 at player, 1 at top
+                        width_at_y = cone_width_bottom + (cone_width_top - cone_width_bottom) * progress
+                        cone_x_left = player.centerx - width_at_y / 2
+                        cone_x_right = player.centerx + width_at_y / 2
+                        if cone_x_left <= enemy.rect.centerx <= cone_x_right:
+                            enemies_hit.append(enemy)
+                            for _ in range(15):
+                                particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(255,255,255)))
+                            score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)) * (2 if overdrive_active else 1)
+            # remove all hit enemies
+            for enemy in enemies_hit:
+                try:
+                    enemies.remove(enemy)
+                    # count beam kills towards the overdrive charge
+                    try:
+                        kill_counter += 1
+                        if not ability_charged and kill_counter >= charge_threshold:
+                            ability_charged = True
+                            play_sound(globals().get('rapid_fire_sound', None) or globals().get('powerup_sound', None))
+                    except Exception:
+                        pass
+                except ValueError:
+                    pass
+            # end beam after duration
+            if orbital_beam_time <= 0:
+                orbital_beam_active = False
+                # stop orbital sound
+                try:
+                    if globals().get('orbital_sound', None):
+                        globals()['orbital_sound'].stop()
+                except Exception:
+                    pass
+
+        # Update overdrive timer
+        if overdrive_active:
+            overdrive_time -= 1/30
+            if overdrive_time <= 0:
+                overdrive_active = False
+                score_multiplier = 1
         
         draw_window()
     
