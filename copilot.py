@@ -11,39 +11,42 @@ pygame.mixer.init()
 # Screen setup
 WIDTH, HEIGHT = 600, 400
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Scorpion Survival")
+pygame.display.set_caption("Starship Defense")
 screen_shake = 0
 
-# Colors
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-BLUE  = (0, 0, 200)
-RED   = (200, 0, 0)
-YELLOW = (255, 200, 0)
-GREEN = (0, 200, 0)
-LIGHT_BLUE = (100, 150, 255)
+# Colors - Sci-fi theme
+BLACK_SPACE = (5, 5, 20)
+CYAN = (0, 255, 255)
+NEON_GREEN = (0, 255, 100)
+NEON_PINK = (255, 0, 200)
+NEON_PURPLE = (150, 0, 255)
+DARK_BLUE = (10, 50, 100)
+WHITE = (220, 220, 255)
+SHIELD_COLOR = (100, 200, 255)
+RED = (255, 50, 50)
 
 # Enemy types
 class EnemyType(Enum):
-    NORMAL = 1
-    FAST = 2
-    TANK = 3
+    DRONE = 1       # Small fast scout
+    FIGHTER = 2     # Medium speed
+    CAPITAL = 3     # Large slow tank
 
 # Power-up types
 class PowerUpType(Enum):
-    SHIELD = 1
-    RAPID_FIRE = 2
-    INVINCIBILITY = 3
+    SHIELD = 1          # Energy shield
+    RAPID_FIRE = 2      # Laser burst
+    INVINCIBILITY = 3   # Warp core
 
 # Particle system
 class Particle:
-    def __init__(self, x, y, vx, vy, lifetime=30):
+    def __init__(self, x, y, vx, vy, lifetime=30, color=(0, 255, 255)):
         self.x = x
         self.y = y
         self.vx = vx
         self.vy = vy
         self.lifetime = lifetime
         self.age = 0
+        self.color = color
     
     def update(self):
         self.x += self.vx
@@ -53,8 +56,10 @@ class Particle:
     
     def draw(self, surface):
         alpha = int(255 * (1 - self.age / self.lifetime))
-        color = (255, max(0, 200 - alpha), 0)
-        pygame.draw.circle(surface, color, (int(self.x), int(self.y)), 3)
+        color = tuple(int(c * (alpha / 255)) for c in self.color)
+        size = int(3 * (1 - self.age / self.lifetime))
+        if size > 0:
+            pygame.draw.circle(surface, color, (int(self.x), int(self.y)), size)
 
 particles = []
 
@@ -108,11 +113,25 @@ class Enemy:
     def __init__(self, x, y, enemy_type):
         self.rect = pygame.Rect(x, y, 40, 40)
         self.type = enemy_type
-        self.health = 1 if enemy_type == EnemyType.NORMAL else (1.5 if enemy_type == EnemyType.FAST else 3)
+        self.health = 1 if enemy_type == EnemyType.DRONE else (1.5 if enemy_type == EnemyType.FIGHTER else 3)
     
     def draw(self, surface):
-        color = RED if self.type == EnemyType.NORMAL else (255, 100, 0) if self.type == EnemyType.FAST else (150, 0, 0)
-        pygame.draw.rect(surface, color, self.rect)
+        if self.type == EnemyType.DRONE:
+            # Small cyan drone
+            pygame.draw.rect(surface, CYAN, self.rect)
+            pygame.draw.circle(surface, NEON_GREEN, self.rect.center, 8, 2)
+        elif self.type == EnemyType.FIGHTER:
+            # Pink fighter
+            pygame.draw.polygon(surface, NEON_PINK, [
+                (self.rect.centerx, self.rect.top),
+                (self.rect.right, self.rect.centery),
+                (self.rect.centerx, self.rect.bottom),
+                (self.rect.left, self.rect.centery)
+            ])
+        else:  # CAPITAL
+            # Large purple capital ship
+            pygame.draw.rect(surface, NEON_PURPLE, self.rect)
+            pygame.draw.circle(surface, CYAN, self.rect.center, 15, 2)
 
 enemies = []
 enemy_speed = 4
@@ -125,8 +144,15 @@ class PowerUp:
         self.type = power_type
     
     def draw(self, surface):
-        color = LIGHT_BLUE if self.type == PowerUpType.SHIELD else (255, 255, 0) if self.type == PowerUpType.RAPID_FIRE else (200, 100, 255)
-        pygame.draw.rect(surface, color, self.rect)
+        if self.type == PowerUpType.SHIELD:
+            pygame.draw.rect(surface, SHIELD_COLOR, self.rect)
+            pygame.draw.circle(surface, CYAN, self.rect.center, 10, 2)
+        elif self.type == PowerUpType.RAPID_FIRE:
+            pygame.draw.rect(surface, NEON_GREEN, self.rect)
+            pygame.draw.line(surface, CYAN, self.rect.topleft, self.rect.bottomright, 2)
+        else:  # INVINCIBILITY
+            pygame.draw.rect(surface, NEON_PINK, self.rect)
+            pygame.draw.circle(surface, NEON_PINK, self.rect.center, 12, 2)
 
 powerups = []
 
@@ -157,56 +183,68 @@ def draw_window():
     shake_x = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
     shake_y = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
     
-    screen.fill(WHITE)
+    screen.fill(BLACK_SPACE)
+    
+    # Draw stars in background
+    for i in range(10):
+        star_x = (int(score / 10) + i * 60) % WIDTH
+        pygame.draw.circle(screen, WHITE, (star_x, 20 + (i % 5) * 60), 1)
     
     # Draw particles
     for particle in particles[:]:
         particle.draw(screen)
     
-    # Draw player
+    # Draw player (starship)
     if player_invincible and int(player_invincible_time * 10) % 2:
-        pygame.draw.rect(screen, LIGHT_BLUE, player.move(shake_x, shake_y))
+        pygame.draw.polygon(screen, SHIELD_COLOR, [
+            (player.centerx, player.top + shake_x),
+            (player.right, player.centery + shake_y),
+            (player.centerx, player.bottom + shake_x),
+            (player.left, player.centery + shake_y)
+        ])
     else:
-        pygame.draw.rect(screen, BLUE, player.move(shake_x, shake_y))
+        pygame.draw.polygon(screen, CYAN, [
+            (player.centerx, player.top + shake_x),
+            (player.right, player.centery + shake_y),
+            (player.centerx, player.bottom + shake_x),
+            (player.left, player.centery + shake_y)
+        ])
     
     if player_shield:
-        pygame.draw.circle(screen, LIGHT_BLUE, player.center, 60, 2)
+        pygame.draw.circle(screen, SHIELD_COLOR, player.center, 60, 3)
     
     # Draw enemies
     for enemy in enemies:
         enemy.draw(screen)
-        # Draw health for tank enemies
-        if enemy.type == EnemyType.TANK and enemy.health < 3:
-            health_color = (0, 255, 0) if enemy.health > 1.5 else RED
-            pygame.draw.circle(screen, health_color, enemy.rect.center, 5)
     
     # Draw power-ups
     for powerup in powerups:
         powerup.draw(screen)
     
-    # Draw missiles
+    # Draw laser missiles
     for missile in missiles:
-        pygame.draw.rect(screen, YELLOW, missile)
+        pygame.draw.line(screen, NEON_GREEN, (missile.centerx, missile.top), (missile.centerx, missile.bottom), 3)
+        pygame.draw.circle(screen, NEON_GREEN, missile.center, 2)
     
-    # Draw UI
-    score_text = font.render(f"Score: {score}", True, BLACK)
-    lives_text = font.render(f"Lives: {lives}", True, RED)
-    high_score_text = small_font.render(f"High: {high_score}", True, BLACK)
+    # Draw UI with neon styling
+    score_text = font.render(f"SCORE: {score}", True, NEON_GREEN)
+    lives_text = font.render(f"SHIPS: {lives}", True, RED)
+    high_score_text = small_font.render(f"HIGH: {high_score}", True, CYAN)
     screen.blit(score_text, (10, 10))
-    screen.blit(lives_text, (WIDTH - 150, 10))
-    screen.blit(high_score_text, (WIDTH - 150, 40))
+    screen.blit(lives_text, (WIDTH - 180, 10))
+    screen.blit(high_score_text, (WIDTH - 180, 40))
     
     # Draw power-up timers
     if player_shield:
-        shield_text = small_font.render(f"Shield: {player_shield_time:.1f}s", True, LIGHT_BLUE)
+        shield_text = small_font.render(f"SHIELD: {player_shield_time:.1f}s", True, SHIELD_COLOR)
         screen.blit(shield_text, (10, 40))
     
     if rapid_fire:
-        rapid_text = small_font.render(f"Rapid Fire: {rapid_fire_time:.1f}s", True, YELLOW)
+        rapid_text = small_font.render(f"BURST: {rapid_fire_time:.1f}s", True, NEON_GREEN)
         screen.blit(rapid_text, (10, 60))
     
     if player_invincible:
-        invincible_text = small_font.render(f"Invincible: {player_invincible_time:.1f}s", True, GREEN)
+        invincible_text = small_font.render(f"WARP: {player_invincible_time:.1f}s", True, NEON_PINK)
         screen.blit(invincible_text, (10, 80))
     
     pygame.display.update()
@@ -215,23 +253,23 @@ def draw_window():
     screen_shake = max(0, screen_shake - 1)
 
 def draw_game_over():
-    screen.fill(WHITE)
-    game_over_text = large_font.render("GAME OVER", True, RED)
-    final_score_text = font.render(f"Final Score: {score}", True, BLACK)
-    high_score_text = font.render(f"High Score: {high_score}", True, BLACK)
-    restart_text = font.render("Press SPACE to Restart or Q to Quit", True, BLACK)
+    screen.fill(BLACK_SPACE)
+    game_over_text = large_font.render("MISSION FAILED", True, RED)
+    final_score_text = font.render(f"FINAL SCORE: {score}", True, NEON_GREEN)
+    high_score_text = font.render(f"HIGH SCORE: {high_score}", True, CYAN)
+    restart_text = font.render("Press SPACE to Restart or Q to Quit", True, WHITE)
     
-    screen.blit(game_over_text, (WIDTH//2 - 150, HEIGHT//2 - 120))
-    screen.blit(final_score_text, (WIDTH//2 - 120, HEIGHT//2 - 20))
-    screen.blit(high_score_text, (WIDTH//2 - 130, HEIGHT//2 + 20))
-    screen.blit(restart_text, (WIDTH//2 - 180, HEIGHT//2 + 80))
+    screen.blit(game_over_text, (WIDTH//2 - 160, HEIGHT//2 - 120))
+    screen.blit(final_score_text, (WIDTH//2 - 150, HEIGHT//2 - 20))
+    screen.blit(high_score_text, (WIDTH//2 - 160, HEIGHT//2 + 20))
+    screen.blit(restart_text, (WIDTH//2 - 200, HEIGHT//2 + 80))
     pygame.display.update()
 
 def draw_pause():
-    screen.fill(BLACK)
-    pause_text = large_font.render("PAUSED", True, WHITE)
+    screen.fill(BLACK_SPACE)
+    pause_text = large_font.render("SYSTEMS PAUSED", True, CYAN)
     resume_text = font.render("Press P to Resume", True, WHITE)
-    screen.blit(pause_text, (WIDTH//2 - 120, HEIGHT//2 - 50))
+    screen.blit(pause_text, (WIDTH//2 - 180, HEIGHT//2 - 50))
     screen.blit(resume_text, (WIDTH//2 - 110, HEIGHT//2 + 50))
     pygame.display.update()
 
@@ -336,13 +374,13 @@ def main():
         # Enemy spawning with varied types
         if random.randint(1, spawn_rate) == 1:
             x_pos = random.randint(0, WIDTH - 40)
-            enemy_type_choice = random.choices([EnemyType.NORMAL, EnemyType.FAST, EnemyType.TANK], 
+            enemy_type_choice = random.choices([EnemyType.DRONE, EnemyType.FIGHTER, EnemyType.CAPITAL], 
                                                weights=[50, 30, 20])[0]
             enemies.append(Enemy(x_pos, 0, enemy_type_choice))
         
         # Enemy movement
         for enemy in enemies[:]:
-            speed = enemy_speed if enemy.type == EnemyType.NORMAL else (enemy_speed * 1.5 if enemy.type == EnemyType.FAST else enemy_speed * 0.7)
+            speed = enemy_speed if enemy.type == EnemyType.DRONE else (enemy_speed * 1.5 if enemy.type == EnemyType.FIGHTER else enemy_speed * 0.7)
             enemy.rect.y += speed
             
             if enemy.rect.top > HEIGHT:
@@ -414,7 +452,7 @@ def main():
                         
                         if enemy.health <= 0:
                             enemies.remove(enemy)
-                            score += 1 if enemy.type == EnemyType.NORMAL else (2 if enemy.type == EnemyType.FAST else 3)
+                            score += 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
                             
                             # Power-up drop
                             if random.random() < 0.15:
