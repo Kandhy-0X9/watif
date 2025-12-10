@@ -15,6 +15,11 @@ screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Starship Defense")
 screen_shake = 0
 
+# CRT filter surface (scanlines)
+crt_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+for y in range(0, HEIGHT, 4):
+    pygame.draw.line(crt_surface, (0, 0, 0, 45), (0, y), (WIDTH, y))
+
 # Colors - Sci-fi theme
 BLACK_SPACE = (5, 5, 20)
 CYAN = (0, 255, 255)
@@ -58,13 +63,38 @@ class Particle:
         return self.age < self.lifetime
     
     def draw(self, surface):
-        alpha = int(255 * (1 - self.age / self.lifetime))
-        color = tuple(int(c * (alpha / 255)) for c in self.color)
-        size = int(3 * (1 - self.age / self.lifetime))
-        if size > 0:
-            pygame.draw.circle(surface, color, (int(self.x), int(self.y)), size)
+        alpha = max(0, int(255 * (1 - self.age / self.lifetime)))
+        # create a small surface for alpha drawing
+        size = max(1, int(3 * (1 - self.age / self.lifetime)))
+        surf = pygame.Surface((size*2, size*2), pygame.SRCALPHA)
+        draw_color = (self.color[0], self.color[1], self.color[2], alpha)
+        pygame.draw.circle(surf, draw_color, (size, size), size)
+        surface.blit(surf, (int(self.x)-size, int(self.y)-size))
 
 particles = []
+
+# Shockwaves (for damage)
+shockwaves = []
+
+class Shockwave:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.radius = 1
+        self.alpha = 255
+    
+    def update(self):
+        self.radius += 4
+        self.alpha -= 10
+        return self.alpha > 0
+    
+    def draw(self, surface):
+        if self.alpha <= 0:
+            return
+        size = int(self.radius * 2 + 6)
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.circle(surf, (255, 255, 255, max(0, self.alpha)), (size//2, size//2), int(self.radius), 3)
+        surface.blit(surf, (int(self.x) - size//2, int(self.y) - size//2))
 
 # Background starfield
 NUM_STARS = 80
@@ -81,7 +111,10 @@ def load_sound(filename):
 
 def play_sound(sound):
     if sound:
-        sound.play()
+        try:
+            sound.play()
+        except:
+            pass
 
 # Audio setup: auto-detect audio files and map them to roles
 shoot_sound = None
@@ -149,11 +182,11 @@ if audio_files:
         hit_sound = load_sound(hit_candidate)
     if powerup_candidate:
         powerup_sound = load_sound(powerup_candidate)
-    if shield_candidate:
+    if 'shield_candidate' in locals() and shield_candidate:
         shield_sound = load_sound(shield_candidate)
     else:
         shield_sound = None
-    if warp_candidate:
+    if 'warp_candidate' in locals() and warp_candidate:
         warp_sound = load_sound(warp_candidate)
     else:
         warp_sound = None
@@ -224,24 +257,30 @@ class Enemy:
         self.rect = pygame.Rect(x, y, 40, 40)
         self.type = enemy_type
         self.health = 1 if enemy_type == EnemyType.DRONE else (1.5 if enemy_type == EnemyType.FIGHTER else 3)
+        self.alpha = 0  # for fade-in warp entry
     
     def draw(self, surface):
+        # Fade in warp effect
+        self.alpha = min(255, self.alpha + 12)
+        surf = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
         if self.type == EnemyType.DRONE:
             # Small cyan drone
-            pygame.draw.rect(surface, CYAN, self.rect)
-            pygame.draw.circle(surface, NEON_GREEN, self.rect.center, 8, 2)
+            pygame.draw.rect(surf, (CYAN[0], CYAN[1], CYAN[2], self.alpha), (0, 0, self.rect.width, self.rect.height))
+            pygame.draw.circle(surf, (NEON_GREEN[0], NEON_GREEN[1], NEON_GREEN[2], self.alpha), (self.rect.width//2, self.rect.height//2), 8, 2)
         elif self.type == EnemyType.FIGHTER:
-            # Pink fighter
-            pygame.draw.polygon(surface, NEON_PINK, [
-                (self.rect.centerx, self.rect.top),
-                (self.rect.right, self.rect.centery),
-                (self.rect.centerx, self.rect.bottom),
-                (self.rect.left, self.rect.centery)
-            ])
+            # Pink fighter - draw polygon on surf
+            points = [
+                (self.rect.width//2, 0),
+                (self.rect.width, self.rect.height//2),
+                (self.rect.width//2, self.rect.height),
+                (0, self.rect.height//2)
+            ]
+            pygame.draw.polygon(surf, (NEON_PINK[0], NEON_PINK[1], NEON_PINK[2], self.alpha), points)
         else:  # CAPITAL
             # Large purple capital ship
-            pygame.draw.rect(surface, NEON_PURPLE, self.rect)
-            pygame.draw.circle(surface, CYAN, self.rect.center, 15, 2)
+            pygame.draw.rect(surf, (NEON_PURPLE[0], NEON_PURPLE[1], NEON_PURPLE[2], self.alpha), (0, 0, self.rect.width, self.rect.height))
+            pygame.draw.circle(surf, (CYAN[0], CYAN[1], CYAN[2], self.alpha), (self.rect.width//2, self.rect.height//2), 15, 2)
+        surface.blit(surf, self.rect.topleft)
 
 enemies = []
 enemy_speed = 4
@@ -266,6 +305,9 @@ class PowerUp:
         elif self.type == PowerUpType.ORBITAL:
             pygame.draw.rect(surface, (255,160,0), self.rect)
             pygame.draw.circle(surface, (255,220,120), self.rect.center, 8, 2)
+        elif self.type == PowerUpType.CUTTER:
+            pygame.draw.rect(surface, (200,200,255), self.rect)
+            pygame.draw.line(surface, (150,180,220), (self.rect.left, self.rect.centery), (self.rect.right, self.rect.centery), 2)
 
 powerups = []
 
@@ -277,9 +319,9 @@ missile_speed = 8
 score = 0
 high_score = load_high_score()
 lives = 3
-font = pygame.font.SysFont("Comic Sans MS", 24)
-large_font = pygame.font.SysFont("Comic Sans MS", 48)
-small_font = pygame.font.SysFont("Comic Sans MS", 16)
+font = pygame.font.Font("space age.ttf", 24)
+large_font = pygame.font.Font("space age.ttf", 48)
+small_font = pygame.font.Font("space age.ttf", 16)
 
 clock = pygame.time.Clock()
 
@@ -288,6 +330,18 @@ PLAYING = 0
 GAME_OVER = 1
 PAUSED = 2
 game_state = PLAYING
+
+# Thruster spawn function
+def spawn_thruster():
+    for _ in range(2):
+        particles.append(Particle(
+            player.centerx + random.randint(-6, 6),
+            player.bottom + random.randint(0, 4),
+            random.uniform(-0.8, 0.8),
+            random.uniform(1.8, 3.2),
+            lifetime=18,
+            color=(150, 200, 255)
+        ))
 
 def draw_window():
     global screen_shake
@@ -299,6 +353,7 @@ def draw_window():
     screen.fill(BLACK_SPACE)
     
     # Draw and update starfield (moving downward for parallax)
+    # We'll draw glow by using small per-star surfaces (keeps alpha)
     for s in stars:
         # s = [x, y, size, speed]
         s[1] += s[3]
@@ -308,11 +363,22 @@ def draw_window():
             s[2] = random.choice([1, 2])
             s[3] = random.uniform(0.5, 1.8)
         color = WHITE if s[2] == 1 else (180, 230, 255)
+        # main star
         pygame.draw.circle(screen, color, (int(s[0]), int(s[1])), s[2])
+        # glow
+        glow_size = s[2] + 3
+        glow_surf = pygame.Surface((glow_size*2, glow_size*2), pygame.SRCALPHA)
+        # alpha a bit subtle
+        pygame.draw.circle(glow_surf, (color[0], color[1], color[2], 40), (glow_size, glow_size), glow_size)
+        screen.blit(glow_surf, (int(s[0])-glow_size, int(s[1])-glow_size))
     
     # Draw particles
     for particle in particles[:]:
         particle.draw(screen)
+    
+    # Draw shockwaves
+    for sw in shockwaves:
+        sw.draw(screen)
     
     # Draw player (starship)
     if player_invincible and int(player_invincible_time * 10) % 2:
@@ -374,9 +440,11 @@ def draw_window():
             (beam_x + cone_width_top // 2, beam_top),
             (beam_x - cone_width_top // 2, beam_top)
         ]
-        pygame.draw.polygon(screen, WHITE, cone_points)
+        beam_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.polygon(beam_surf, (255, 255, 255, 200), cone_points)
         # glow effect around cone
-        pygame.draw.polygon(screen, (200, 200, 255), cone_points, 3)
+        pygame.draw.polygon(beam_surf, (200, 200, 255, 120), cone_points, 3)
+        screen.blit(beam_surf, (0, 0))
 
     # Draw cutter blades if active
     if cutter_active:
@@ -387,8 +455,10 @@ def draw_window():
             by = cy + math.sin(angle) * cutter_blade_distance
             # blade body
             pygame.draw.circle(screen, (200, 200, 220), (int(bx), int(by)), cutter_blade_size)
-            # blade glow
-            pygame.draw.circle(screen, (150, 180, 220), (int(bx), int(by)), cutter_blade_size+3, 2)
+            # blade glow (use a small surface)
+            glow = pygame.Surface((cutter_blade_size*3, cutter_blade_size*3), pygame.SRCALPHA)
+            pygame.draw.circle(glow, (150, 180, 220, 120), (cutter_blade_size, cutter_blade_size), cutter_blade_size+3)
+            screen.blit(glow, (int(bx)-cutter_blade_size, int(by)-cutter_blade_size))
     
     # Draw laser missiles
     for missile in missiles:
@@ -421,6 +491,10 @@ def draw_window():
     if orbital_charging:
         orbital_text = small_font.render(f"CHARGING: {orbital_charge_time:.1f}s", True, (255, 200, 50))
         screen.blit(orbital_text, (10, 100))
+    
+    # Apply CRT filter with slight opacity (scanlines)
+    screen.blit(crt_surface, (0, 0))
+
     
     pygame.display.update()
     
@@ -462,6 +536,7 @@ def reset_game():
     missiles.clear()
     powerups.clear()
     particles.clear()
+    shockwaves.clear()
     player.x = WIDTH // 2
     player_shield = False
     player_shield_time = 0
@@ -552,14 +627,23 @@ def main():
         
         # Player movement
         keys = pygame.key.get_pressed()
+        moving = False
         if keys[pygame.K_a] and player.left > 0:
             player.x -= player_speed
+            moving = True
         if keys[pygame.K_d] and player.right < WIDTH:
             player.x += player_speed
+            moving = True
         if keys[pygame.K_w] and player.top > 50:
             player.y -= player_speed
+            moving = True
         if keys[pygame.K_s] and player.bottom < HEIGHT:
             player.y += player_speed
+            moving = True
+        
+        # Thruster particles if moving
+        if moving:
+            spawn_thruster()
         
         # Difficulty scaling
         if score > 0 and score % 10 == 0:
@@ -601,6 +685,7 @@ def main():
                             particles.append(Particle(player.centerx, player.centery, 
                                                     random.uniform(-5, 5), random.uniform(-5, 5)))
                         enemies.remove(enemy)
+                        shockwaves.append(Shockwave(player.centerx, player.centery))
                         if lives <= 0:
                             game_state = GAME_OVER
                             if score > high_score:
@@ -727,7 +812,18 @@ def main():
         # Update particles
         for particle in particles[:]:
             if not particle.update():
-                particles.remove(particle)
+                try:
+                    particles.remove(particle)
+                except ValueError:
+                    pass
+        
+        # Update shockwaves
+        for sw in shockwaves[:]:
+            if not sw.update():
+                try:
+                    shockwaves.remove(sw)
+                except ValueError:
+                    pass
         
         # Update orbitals (charging then beam)
         if orbital_charging:
@@ -777,31 +873,21 @@ def main():
                 (player.centerx + cone_width_top // 2, 0),
                 (player.centerx - cone_width_top // 2, 0)
             ]
-            beam_polygon = pygame.draw.polygon(pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA), (255, 255, 255, 0), cone_points)
             enemies_hit = []
             for enemy in enemies[:]:
-                # Check if enemy center is within the cone bounds
-                # Simple approach: check if enemy is within expanding cone
-                beam_rect = pygame.Rect(player.centerx - cone_width_bottom//2, 0, cone_width_bottom, player.top)
-                if beam_rect.colliderect(enemy.rect):
-                    enemies_hit.append(enemy)
-                    for _ in range(15):
-                        particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(255,255,255)))
-                    score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3))
-                else:
-                    # More precise cone collision: check if enemy is within expanding cone
-                    enemy_y = enemy.rect.centery
-                    if 0 <= enemy_y <= player.top:
-                        # Calculate cone width at enemy's y position
-                        progress = 1 - (enemy_y / player.top)  # 0 at player, 1 at top
-                        width_at_y = cone_width_bottom + (cone_width_top - cone_width_bottom) * progress
-                        cone_x_left = player.centerx - width_at_y / 2
-                        cone_x_right = player.centerx + width_at_y / 2
-                        if cone_x_left <= enemy.rect.centerx <= cone_x_right:
-                            enemies_hit.append(enemy)
-                            for _ in range(15):
-                                particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(255,255,255)))
-                            score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3))
+                # More precise cone collision: check if enemy is within expanding cone
+                enemy_y = enemy.rect.centery
+                if 0 <= enemy_y <= player.top:
+                    # Calculate cone width at enemy's y position
+                    progress = 1 - (enemy_y / player.top)  # 0 at player, 1 at top
+                    width_at_y = cone_width_bottom + (cone_width_top - cone_width_bottom) * progress
+                    cone_x_left = player.centerx - width_at_y / 2
+                    cone_x_right = player.centerx + width_at_y / 2
+                    if cone_x_left <= enemy.rect.centerx <= cone_x_right:
+                        enemies_hit.append(enemy)
+                        for _ in range(15):
+                            particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(255,255,255)))
+                        score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3))
             # remove all hit enemies
             for enemy in enemies_hit:
                 try:
