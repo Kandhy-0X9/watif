@@ -204,14 +204,7 @@ orbital_beam_active = False
 orbital_beam_duration = 2.0  # beam lasts 2 seconds
 orbital_beam_time = 0.0
 orbital_beam_width = 80  # beam width in pixels
-# Overdrive (non-pickup ability) - charges by kills
-kill_counter = 0
-charge_threshold = 50
-ability_charged = False
-overdrive_active = False
-overdrive_duration = 10.0
-overdrive_time = 0.0
-score_multiplier = 1
+# (Overdrive removed) No chargeable ability present
 
 # Enemy setup
 class Enemy:
@@ -375,11 +368,6 @@ def draw_window():
     
     # Draw laser missiles
     for missile in missiles:
-        if overdrive_active:
-            # Blue and bigger during overdrive
-            pygame.draw.line(screen, (0, 150, 255), (missile.centerx, missile.top), (missile.centerx, missile.bottom), 5)
-            pygame.draw.circle(screen, (0, 150, 255), missile.center, 3)
-        else:
             # Normal green missiles
             pygame.draw.line(screen, NEON_GREEN, (missile.centerx, missile.top), (missile.centerx, missile.bottom), 3)
             pygame.draw.circle(screen, NEON_GREEN, missile.center, 2)
@@ -391,12 +379,7 @@ def draw_window():
     screen.blit(score_text, (10, 10))
     screen.blit(lives_text, (WIDTH - 180, 10))
     screen.blit(high_score_text, (WIDTH - 180, 40))
-    # Overdrive charge UI
-    charge_text = small_font.render(f"OVERDRIVE: {kill_counter}/{charge_threshold}", True, NEON_PURPLE)
-    screen.blit(charge_text, (10, 100))
-    if ability_charged:
-        hint_text = small_font.render("Press E to Activate Overdrive", True, (255,200,50))
-        screen.blit(hint_text, (10, HEIGHT - 30))
+    # (Removed overdrive UI)
     
     # Draw power-up timers
     if player_shield:
@@ -446,7 +429,6 @@ def reset_game():
     global player_shield, player_shield_time, player_invincible, player_invincible_time
     global rapid_fire, rapid_fire_time, rapid_fire_counter
     global orbital_count, orbital_beam_active, orbital_charging, orbital_charge_time
-    global kill_counter, ability_charged, overdrive_active, overdrive_time, score_multiplier
     score = 0
     lives = 3
     enemy_speed = 4
@@ -467,12 +449,7 @@ def reset_game():
     orbital_charging = False
     orbital_charge_time = 0
     orbital_beam_active = False
-    # reset overdrive
-    kill_counter = 0
-    ability_charged = False
-    overdrive_active = False
-    overdrive_time = 0
-    score_multiplier = 1
+    # (overdrive removed; no chargeable ability to reset)
     game_state = PLAYING
 
 def main():
@@ -481,9 +458,7 @@ def main():
     global rapid_fire, rapid_fire_time, rapid_fire_counter
     global orbital_count, orbital_charging, orbital_charge_duration, orbital_charge_time
     global orbital_beam_active, orbital_beam_time, orbital_beam_duration, orbital_beam_width
-    # Overdrive globals
-    global kill_counter, charge_threshold, ability_charged
-    global overdrive_active, overdrive_duration, overdrive_time, score_multiplier
+    # (overdrive removed)
     
     running = True
     running = True
@@ -525,15 +500,7 @@ def main():
                     play_sound(shoot_sound)
                 if event.key == pygame.K_p:
                     game_state = PAUSED
-                if event.key == pygame.K_e:
-                    # Activate Overdrive if charged
-                    if ability_charged and not overdrive_active:
-                        overdrive_active = True
-                        overdrive_time = overdrive_duration
-                        ability_charged = False
-                        kill_counter = 0
-                        score_multiplier = 2
-                        play_sound(globals().get('rapid_fire_sound', None) or globals().get('powerup_sound', None))
+                # (Overdrive activation removed)
         
         # Update power-up timers
         if player_shield:
@@ -660,7 +627,7 @@ def main():
                 hit = False
                 for enemy in enemies[:]:
                     if missile.colliderect(enemy.rect):
-                        enemy.health -= (2 if overdrive_active else 1)
+                        enemy.health -= 1
                         
                         # Explosion particles
                         for _ in range(10):
@@ -669,17 +636,9 @@ def main():
                         
                         if enemy.health <= 0:
                             enemies.remove(enemy)
-                            # Count kill and apply score (overdrive doubles score via multiplier)
+                            # Count kill and apply score
                             base_score = 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
-                            score += base_score * (2 if overdrive_active else 1)
-                            # increment kill counter for overdrive charge
-                            try:
-                                kill_counter += 1
-                                if not ability_charged and kill_counter >= charge_threshold:
-                                    ability_charged = True
-                                    play_sound(globals().get('rapid_fire_sound', None) or globals().get('powerup_sound', None))
-                            except Exception:
-                                pass
+                            score += base_score
 
                             # Power-up drop
                             if random.random() < 0.15:
@@ -737,7 +696,7 @@ def main():
                     enemies_hit.append(enemy)
                     for _ in range(15):
                         particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(255,255,255)))
-                    score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)) * (2 if overdrive_active else 1)
+                    score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3))
                 else:
                     # More precise cone collision: check if enemy is within expanding cone
                     enemy_y = enemy.rect.centery
@@ -751,19 +710,11 @@ def main():
                             enemies_hit.append(enemy)
                             for _ in range(15):
                                 particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(255,255,255)))
-                            score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)) * (2 if overdrive_active else 1)
+                            score += (1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3))
             # remove all hit enemies
             for enemy in enemies_hit:
                 try:
                     enemies.remove(enemy)
-                    # count beam kills towards the overdrive charge
-                    try:
-                        kill_counter += 1
-                        if not ability_charged and kill_counter >= charge_threshold:
-                            ability_charged = True
-                            play_sound(globals().get('rapid_fire_sound', None) or globals().get('powerup_sound', None))
-                    except Exception:
-                        pass
                 except ValueError:
                     pass
             # end beam after duration
@@ -776,12 +727,7 @@ def main():
                 except Exception:
                     pass
 
-        # Update overdrive timer
-        if overdrive_active:
-            overdrive_time -= 1/30
-            if overdrive_time <= 0:
-                overdrive_active = False
-                score_multiplier = 1
+        # (Overdrive removed)
         
         draw_window()
     
