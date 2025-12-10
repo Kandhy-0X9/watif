@@ -38,6 +38,7 @@ class PowerUpType(Enum):
     RAPID_FIRE = 2      # Laser burst
     INVINCIBILITY = 3   # Warp core
     ORBITAL = 4         # Deployable orbital satellites
+    CUTTER = 5          # Freezes enemies + spinning blades
 
 # Particle system
 class Particle:
@@ -204,6 +205,17 @@ orbital_beam_active = False
 orbital_beam_duration = 2.0  # beam lasts 2 seconds
 orbital_beam_time = 0.0
 orbital_beam_width = 80  # beam width in pixels
+# Cutter upgrade (rare like orbital): freezes enemies and spins blades
+cutter_charging = False
+cutter_charge_duration = 12.0
+cutter_charge_time = 0.0
+cutter_active = False
+cutter_active_duration = 5.0
+cutter_active_time = 0.0
+cutter_blade_distance = 60
+cutter_blade_size = 10
+cutter_rotation_angle = 0.0
+cutter_rotation_speed = 0.25
 # (Overdrive removed) No chargeable ability present
 
 # Enemy setup
@@ -365,6 +377,18 @@ def draw_window():
         pygame.draw.polygon(screen, WHITE, cone_points)
         # glow effect around cone
         pygame.draw.polygon(screen, (200, 200, 255), cone_points, 3)
+
+    # Draw cutter blades if active
+    if cutter_active:
+        cx, cy = player.centerx, player.centery
+        for i in range(4):
+            angle = cutter_rotation_angle + math.pi/4 + i * (math.pi/2)
+            bx = cx + math.cos(angle) * cutter_blade_distance
+            by = cy + math.sin(angle) * cutter_blade_distance
+            # blade body
+            pygame.draw.circle(screen, (200, 200, 220), (int(bx), int(by)), cutter_blade_size)
+            # blade glow
+            pygame.draw.circle(screen, (150, 180, 220), (int(bx), int(by)), cutter_blade_size+3, 2)
     
     # Draw laser missiles
     for missile in missiles:
@@ -429,6 +453,7 @@ def reset_game():
     global player_shield, player_shield_time, player_invincible, player_invincible_time
     global rapid_fire, rapid_fire_time, rapid_fire_counter
     global orbital_count, orbital_beam_active, orbital_charging, orbital_charge_time
+    global cutter_charging, cutter_charge_time, cutter_active, cutter_active_time, cutter_rotation_angle
     score = 0
     lives = 3
     enemy_speed = 4
@@ -449,7 +474,12 @@ def reset_game():
     orbital_charging = False
     orbital_charge_time = 0
     orbital_beam_active = False
-    # (overdrive removed; no chargeable ability to reset)
+    # reset cutter state
+    cutter_charging = False
+    cutter_charge_time = 0
+    cutter_active = False
+    cutter_active_time = 0
+    cutter_rotation_angle = 0.0
     game_state = PLAYING
 
 def main():
@@ -458,7 +488,9 @@ def main():
     global rapid_fire, rapid_fire_time, rapid_fire_counter
     global orbital_count, orbital_charging, orbital_charge_duration, orbital_charge_time
     global orbital_beam_active, orbital_beam_time, orbital_beam_duration, orbital_beam_width
-    # (overdrive removed)
+    # Cutter globals
+    global cutter_charging, cutter_charge_duration, cutter_charge_time
+    global cutter_active, cutter_active_duration, cutter_active_time, cutter_rotation_angle, cutter_rotation_speed, cutter_blade_distance, cutter_blade_size
     
     running = True
     running = True
@@ -543,7 +575,11 @@ def main():
         
         # Enemy movement
         for enemy in enemies[:]:
-            speed = enemy_speed if enemy.type == EnemyType.DRONE else (enemy_speed * 1.5 if enemy.type == EnemyType.FIGHTER else enemy_speed * 0.7)
+            # Slow enemies while cutter is active (instead of full freeze)
+            if cutter_active:
+                speed = enemy_speed * 0.2
+            else:
+                speed = enemy_speed if enemy.type == EnemyType.DRONE else (enemy_speed * 1.5 if enemy.type == EnemyType.FIGHTER else enemy_speed * 0.7)
             enemy.rect.y += speed
             
             if enemy.rect.top > HEIGHT:
@@ -616,6 +652,12 @@ def main():
                     player_invincible = True
                     # total invincibility covers charge duration + beam duration
                     player_invincible_time = orbital_charge_duration + orbital_beam_duration
+                elif powerup.type == PowerUpType.CUTTER:
+                    # collect cutter upgrade and start charging (rare)
+                    play_sound(globals().get('cutter_sound', None) or globals().get('powerup_sound', None))
+                    cutter_charging = True
+                    cutter_charge_time = cutter_charge_duration
+                    # no auto-invincibility for cutter; only freezes enemies when active
                 powerups.remove(powerup)
         
         # Missile movement
@@ -642,14 +684,45 @@ def main():
 
                             # Power-up drop
                             if random.random() < 0.15:
-                                powerup_type = random.choices([PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL],
-                                                             weights=[35, 30, 20, 15])[0]
+                                powerup_type = random.choices(
+                                    [PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL, PowerUpType.CUTTER],
+                                    weights=[35, 30, 20, 15, 15]
+                                )[0]
                                 powerups.append(PowerUp(enemy.rect.centerx, enemy.rect.centery, powerup_type))
                         
                         if missile in missiles:
                             missiles.remove(missile)
                         hit = True
                         break
+
+        # Cutter blades collision (damage enemies that touch blades)
+        if cutter_active:
+            cx, cy = player.centerx, player.centery
+            blades = []
+            for i in range(4):
+                angle = cutter_rotation_angle + math.pi/4 + i * (math.pi/2)
+                bx = cx + math.cos(angle) * cutter_blade_distance
+                by = cy + math.sin(angle) * cutter_blade_distance
+                blades.append((bx, by))
+            for enemy in enemies[:]:
+                hit_by_blade = False
+                for bx, by in blades:
+                    if enemy.rect.collidepoint(int(bx), int(by)):
+                        # play cutter sound and spawn particles
+                        play_sound(globals().get('cutter_sound', None) or globals().get('powerup_sound', None))
+                        for _ in range(12):
+                            particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-4, 4), random.uniform(-4, 4), color=(200,200,255)))
+                        # apply damage and score
+                        base_score = 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
+                        try:
+                            enemies.remove(enemy)
+                            score += base_score
+                        except ValueError:
+                            pass
+                        hit_by_blade = True
+                        break
+                if hit_by_blade:
+                    continue
         
         # Update particles
         for particle in particles[:]:
@@ -673,6 +746,24 @@ def main():
                     enemy_type = random.choices([EnemyType.DRONE, EnemyType.FIGHTER, EnemyType.CAPITAL], weights=[50, 35, 15])[0]
                     x = random.randint(0, WIDTH - 40)
                     enemies.append(Enemy(x, -40, enemy_type))
+        
+            # Update cutter active timer and rotation
+            if cutter_active:
+                cutter_active_time -= 1/30
+                cutter_rotation_angle += cutter_rotation_speed
+                if cutter_active_time <= 0:
+                    cutter_active = False
+                    cutter_rotation_angle = 0.0
+
+        # Update cutter (charging then active blades)
+        if cutter_charging:
+            cutter_charge_time -= 1/30
+            if cutter_charge_time <= 0:
+                cutter_charging = False
+                cutter_active = True
+                cutter_active_time = cutter_active_duration
+                # play cutter activation sound if available
+                play_sound(globals().get('cutter_sound', None) or globals().get('powerup_sound', None))
         
         # Update orbitals (beam collision)
         if orbital_beam_active:
