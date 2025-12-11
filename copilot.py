@@ -7,14 +7,16 @@ import math
 from enum import Enum
 
 # =============================================================================
-#  Starship Defense (single-file Pygame shooter) — cutter removed
+#  Starship Defense (single-file Pygame shooter) - Patched
+#  - Includes: Plasma weapon, Overdrive (with aura + cooldown), audio auto-detect
+#  - Linting/formatting: modest cleanup for readability
 # =============================================================================
 
-# --- Pygame init (video + audio) ------------------------------------------------
+# --- Pygame init (video + audio)
 pygame.init()
 pygame.mixer.init()
 
-# --- Screen setup ----------------------------------------------------------------
+# --- Screen setup
 WIDTH, HEIGHT = 600, 400
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Starship Defense")
@@ -22,12 +24,12 @@ pygame.display.set_caption("Starship Defense")
 # Screen shake magnitude (frames) used after taking a hit
 screen_shake = 0
 
-# --- CRT overlay (scanlines) ------------------------------------------------------
+# --- CRT overlay (scanlines)
 crt_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
 for y in range(0, HEIGHT, 4):
     pygame.draw.line(crt_surface, (0, 0, 0, 45), (0, y), (WIDTH, y))
 
-# --- Palette (neon sci-fi) --------------------------------------------------------
+# --- Palette
 BLACK_SPACE = (5, 5, 20)
 CYAN = (0, 255, 255)
 NEON_GREEN = (0, 255, 100)
@@ -38,39 +40,38 @@ WHITE = (220, 220, 255)
 SHIELD_COLOR = (100, 200, 255)
 RED = (255, 50, 50)
 
-# --- Enumerations ----------------------------------------------------------------
+# --- Enumerations
 class EnemyType(Enum):
-    DRONE = 1       # Small fast scout
-    FIGHTER = 2     # Medium speed / medium durability
-    CAPITAL = 3     # Large slow tank (more health)
+    DRONE = 1
+    FIGHTER = 2
+    CAPITAL = 3
+
 
 class PowerUpType(Enum):
-    SHIELD = 1          # Temporary damage absorption
-    RAPID_FIRE = 2      # Auto-fire for a short duration
-    INVINCIBILITY = 3   # Warp core (player ignores damage)
-    ORBITAL = 4         # Orbital satellite (charge + beam strike)
-    # CUTTER removed
+    SHIELD = 1
+    RAPID_FIRE = 2
+    INVINCIBILITY = 3
+    ORBITAL = 4
+    PLASMA = 5
 
-# --- Particle system (simple lightweight effects) ---------------------------------
+# --- Particle system
 class Particle:
     def __init__(self, x, y, vx, vy, lifetime=30, color=(0, 255, 255)):
         self.x = x
         self.y = y
         self.vx = vx
         self.vy = vy
-        self.lifetime = lifetime  # frames alive
+        self.lifetime = lifetime
         self.age = 0
         self.color = color
 
     def update(self):
-        # Integrate position and age; return False when the particle should be removed
         self.x += self.vx
         self.y += self.vy
         self.age += 1
         return self.age < self.lifetime
 
     def draw(self, surface):
-        # Fade-out: alpha and size shrink over lifetime
         alpha = max(0, int(255 * (1 - self.age / self.lifetime)))
         size = max(1, int(3 * (1 - self.age / self.lifetime)))
         surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
@@ -79,11 +80,9 @@ class Particle:
         surface.blit(surf, (int(self.x) - size, int(self.y) - size))
 
 
-particles = []  # global particle pool (appended to from many subsystems)
+particles = []
 
-# --- Shockwaves (big ring when the player takes damage) ----------------------------
-shockwaves = []
-
+# --- Shockwaves
 class Shockwave:
     def __init__(self, x, y):
         self.x = x
@@ -92,7 +91,6 @@ class Shockwave:
         self.alpha = 255
 
     def update(self):
-        # Expand outward and fade; return False once fully transparent
         self.radius += 4
         self.alpha -= 10
         return self.alpha > 0
@@ -102,32 +100,26 @@ class Shockwave:
             return
         size = int(self.radius * 2 + 6)
         surf = pygame.Surface((size, size), pygame.SRCALPHA)
-        pygame.draw.circle(
-            surf,
-            (255, 255, 255, max(0, self.alpha)),
-            (size // 2, size // 2),
-            int(self.radius),
-            3,
-        )
+        pygame.draw.circle(surf, (255, 255, 255, max(0, self.alpha)), (size // 2, size // 2), int(self.radius), 3)
         surface.blit(surf, (int(self.x) - size // 2, int(self.y) - size // 2))
 
-# --- Background starfield (cheap parallax) ----------------------------------------
+
+shockwaves = []
+
+# --- Background starfield
 NUM_STARS = 80
 stars = []
 for _ in range(NUM_STARS):
-    stars.append([
-        random.randint(0, WIDTH),
-        random.randint(0, HEIGHT),
-        random.choice([1, 2]),
-        random.uniform(0.5, 1.8),
-    ])
+    stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT), random.choice([1, 2]), random.uniform(0.5, 1.8)])
 
-# --- Audio helpers (safe fallback when files are missing) --------------------------
+# --- Audio helpers
+
 def load_sound(filename):
     try:
         return pygame.mixer.Sound(filename)
     except Exception:
         return None
+
 
 def play_sound(sound):
     if sound:
@@ -136,7 +128,7 @@ def play_sound(sound):
         except Exception:
             pass
 
-# --- Audio auto-mapping (tries to find sensible file names in current folder) ------
+# --- Audio auto-mapping
 shoot_sound = None
 hit_sound = None
 powerup_sound = None
@@ -144,12 +136,12 @@ rapid_fire_sound = None
 shield_sound = None
 warp_sound = None
 orbital_sound = None
-# cutter_sound removed
+plasma_sound = None
+overdrive_sound = None
 bg_music_file = None
 
 audio_files = [f for f in os.listdir('.') if f.lower().endswith(('.mp3', '.wav', '.ogg'))]
 if audio_files:
-    # Prefer ambient/background-sounding names for music
     for f in audio_files:
         if any(k in f.lower() for k in ('background', 'bg', 'music', 'ambient')):
             bg_music_file = f
@@ -157,7 +149,6 @@ if audio_files:
     if not bg_music_file:
         bg_music_file = audio_files[0]
 
-    # Stream background music through mixer.music (better for long tracks)
     try:
         pygame.mixer.music.load(bg_music_file)
         pygame.mixer.music.set_volume(0.25)
@@ -166,7 +157,6 @@ if audio_files:
         bg_music_file = None
 
     def pick_file(keywords, exclude=None):
-        """Return the first audio filename containing any of the given keywords."""
         for f in audio_files:
             if exclude and f == exclude:
                 continue
@@ -175,15 +165,14 @@ if audio_files:
                 return f
         return None
 
-    # Map roles to likely file names (best-effort)
     shoot_candidate = pick_file(('laser', 'shoot', 'gun', 'pew', 'zap'))
     hit_candidate = pick_file(('hit', 'explode', 'explosion', 'boom', 'impact'), exclude=bg_music_file)
     powerup_candidate = pick_file(('powerup', 'power', 'pickup', 'collect', 'ping'), exclude=bg_music_file)
     rapid_candidate = pick_file(('burst', 'rapid', 'auto', 'blip'), exclude=bg_music_file)
     orbital_candidate = pick_file(('orbital', 'orb', 'satellite', 'deploy', 'launch'), exclude=bg_music_file)
-    # cutter_candidate removed
+    plasma_candidate = pick_file(('plasma', 'blast', 'blaster', 'wave'), exclude=bg_music_file)
+    overdrive_candidate = pick_file(('overdrive',), exclude=bg_music_file)
 
-    # Fallbacks if a category wasn't found
     if not shoot_candidate:
         shoot_candidate = pick_file(('laser', 'shoot', 'gun')) or (audio_files[0] if audio_files else None)
     if not hit_candidate:
@@ -195,7 +184,6 @@ if audio_files:
     if not rapid_candidate:
         rapid_candidate = pick_file(('burst', 'rapid'))
 
-    # Load all resolved files (safe if any are None)
     if shoot_candidate:
         shoot_sound = load_sound(shoot_candidate)
     if hit_candidate:
@@ -218,10 +206,18 @@ if audio_files:
         orbital_sound = load_sound(orbital_candidate)
     else:
         orbital_sound = None
-    # cutter_sound assignment removed
+    if plasma_candidate:
+        plasma_sound = load_sound(plasma_candidate)
+    else:
+        plasma_sound = None
+    if overdrive_candidate:
+        overdrive_sound = load_sound(overdrive_candidate)
+    else:
+        overdrive_sound = None
 
-# --- High score persistence ------------------------------------------------------
+# --- High score persistence
 SCORE_FILE = "highscore.json"
+
 
 def load_high_score():
     if os.path.exists(SCORE_FILE):
@@ -232,11 +228,12 @@ def load_high_score():
             return 0
     return 0
 
+
 def save_high_score(score):
     with open(SCORE_FILE, 'w') as f:
         json.dump({'high_score': score}, f)
 
-# --- Player state ----------------------------------------------------------------
+# --- Player state
 player_size = 50
 player = pygame.Rect(WIDTH // 2, HEIGHT - player_size - 10, player_size, player_size)
 player_speed = 7
@@ -253,61 +250,59 @@ rapid_fire_counter = 0
 
 orbital_count = 0
 orbital_charging = False
-orbital_charge_duration = 12.0  # seconds to charge
+orbital_charge_duration = 12.0
 orbital_charge_time = 0.0
 orbital_beam_active = False
-orbital_beam_duration = 2.0     # beam lasts 2 seconds
+orbital_beam_duration = 2.0
 orbital_beam_time = 0.0
 orbital_beam_width = 80
 
-# --- Enemy entity ---------------------------------------------------------------
+# --- Plasma globals
+plasma_active = False
+plasma_radius = 0.0
+plasma_max_radius = 160.0
+plasma_expand_speed = 14.0
+plasma_hits = set()
+
+# --- Overdrive system (with cooldown + aura)
+overdrive_points = 0
+overdrive_ready = False
+overdrive_active = False
+overdrive_timer = 0.0
+overdrive_cooldown = 8.0
+overdrive_on_cooldown = False
+overdrive_cd_timer = 0.0
+
+# --- Enemy entity
 class Enemy:
     def __init__(self, x, y, enemy_type):
         self.rect = pygame.Rect(x, y, 40, 40)
         self.type = enemy_type
         self.health = 1 if enemy_type == EnemyType.DRONE else (1.5 if enemy_type == EnemyType.FIGHTER else 3)
-        self.alpha = 0  # used for warp-in fade
+        self.alpha = 0
 
     def draw(self, surface):
-        # Each frame we ramp alpha up for a quick warp-entry effect
         self.alpha = min(255, self.alpha + 12)
         surf = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
 
         if self.type == EnemyType.DRONE:
             pygame.draw.rect(surf, (CYAN[0], CYAN[1], CYAN[2], self.alpha), (0, 0, self.rect.width, self.rect.height))
-            pygame.draw.circle(
-                surf,
-                (NEON_GREEN[0], NEON_GREEN[1], NEON_GREEN[2], self.alpha),
-                (self.rect.width // 2, self.rect.height // 2),
-                8,
-                2,
-            )
+            pygame.draw.circle(surf, (NEON_GREEN[0], NEON_GREEN[1], NEON_GREEN[2], self.alpha), (self.rect.width // 2, self.rect.height // 2), 8, 2)
         elif self.type == EnemyType.FIGHTER:
-            points = [
-                (self.rect.width // 2, 0),
-                (self.rect.width, self.rect.height // 2),
-                (self.rect.width // 2, self.rect.height),
-                (0, self.rect.height // 2),
-            ]
+            points = [(self.rect.width // 2, 0), (self.rect.width, self.rect.height // 2), (self.rect.width // 2, self.rect.height), (0, self.rect.height // 2)]
             pygame.draw.polygon(surf, (NEON_PINK[0], NEON_PINK[1], NEON_PINK[2], self.alpha), points)
-        else:  # CAPITAL
+        else:
             pygame.draw.rect(surf, (NEON_PURPLE[0], NEON_PURPLE[1], NEON_PURPLE[2], self.alpha), (0, 0, self.rect.width, self.rect.height))
-            pygame.draw.circle(
-                surf,
-                (CYAN[0], CYAN[1], CYAN[2], self.alpha),
-                (self.rect.width // 2, self.rect.height // 2),
-                15,
-                2,
-            )
+            pygame.draw.circle(surf, (CYAN[0], CYAN[1], CYAN[2], self.alpha), (self.rect.width // 2, self.rect.height // 2), 15, 2)
 
         surface.blit(surf, self.rect.topleft)
 
 
 enemies = []
 enemy_speed = 4
-spawn_rate = 25  # lower = more frequent spawns
+spawn_rate = 25
 
-# --- Power-ups -------------------------------------------------------------------
+# --- Power-ups
 class PowerUp:
     def __init__(self, x, y, power_type):
         self.rect = pygame.Rect(x, y, 20, 20)
@@ -326,62 +321,51 @@ class PowerUp:
         elif self.type == PowerUpType.ORBITAL:
             pygame.draw.rect(surface, (255, 160, 0), self.rect)
             pygame.draw.circle(surface, (255, 220, 120), self.rect.center, 8, 2)
-        # cutter drawing removed
+        elif self.type == PowerUpType.PLASMA:
+            pygame.draw.rect(surface, (30, 30, 40), self.rect)
+            pygame.draw.circle(surface, (0, 200, 200), self.rect.center, 9, 2)
+            pygame.draw.circle(surface, WHITE, self.rect.center, 5)
+
 
 powerups = []
 
-# --- Missiles (player projectiles) ------------------------------------------------
+# --- Missiles
 missiles = []
 missile_speed = 8
 
-# --- Score + UI fonts ------------------------------------------------------------
+# --- Score + UI
 score = 0
 high_score = load_high_score()
 lives = 3
-# If the font file isn't present the Font call might fail; fallback to default
-try:
-    font = pygame.font.Font("space age.ttf", 24)
-    large_font = pygame.font.Font("space age.ttf", 48)
-    small_font = pygame.font.Font("space age.ttf", 16)
-except Exception:
-    font = pygame.font.SysFont(None, 24)
-    large_font = pygame.font.SysFont(None, 48)
-    small_font = pygame.font.SysFont(None, 16)
+font = pygame.font.Font("space age.ttf", 24)
+large_font = pygame.font.Font("space age.ttf", 48)
+small_font = pygame.font.Font("space age.ttf", 16)
 
 clock = pygame.time.Clock()
 
-# --- Game state constants --------------------------------------------------------
+# --- Game states
 PLAYING = 0
 GAME_OVER = 1
 PAUSED = 2
 
 game_state = PLAYING
 
-# --- Helper: thruster particles (visual feedback for movement) --------------------
+# --- Helper
 def spawn_thruster():
     for _ in range(2):
-        particles.append(
-            Particle(
-                player.centerx + random.randint(-6, 6),
-                player.bottom + random.randint(0, 4),
-                random.uniform(-0.8, 0.8),
-                random.uniform(1.8, 3.2),
-                lifetime=18,
-                color=(150, 200, 255),
-            )
-        )
+        particles.append(Particle(player.centerx + random.randint(-6, 6), player.bottom + random.randint(0, 4), random.uniform(-0.8, 0.8), random.uniform(1.8, 3.2), lifetime=18, color=(150, 200, 255)))
 
-# --- Main draw function (one frame) ----------------------------------------------
+# --- Draw frame
 def draw_window():
-    global screen_shake
+    global screen_shake, plasma_active, plasma_radius
+    global overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
 
-    # Apply screen shake by offsetting everything implicitly (via local shake coords)
     shake_x = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
     shake_y = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
 
     screen.fill(BLACK_SPACE)
 
-    # Starfield update + render (simple parallax by moving stars downward)
+    # Stars
     for s in stars:
         s[1] += s[3]
         if s[1] > HEIGHT:
@@ -391,99 +375,74 @@ def draw_window():
             s[3] = random.uniform(0.5, 1.8)
         color = WHITE if s[2] == 1 else (180, 230, 255)
         pygame.draw.circle(screen, color, (int(s[0]), int(s[1])), s[2])
-
-        # soft glow (separate surface so we can use per-pixel alpha)
         glow_size = s[2] + 3
         glow_surf = pygame.Surface((glow_size * 2, glow_size * 2), pygame.SRCALPHA)
         pygame.draw.circle(glow_surf, (color[0], color[1], color[2], 40), (glow_size, glow_size), glow_size)
         screen.blit(glow_surf, (int(s[0]) - glow_size, int(s[1]) - glow_size))
 
-    # Particles and shockwaves sit behind most gameplay elements
+    # Particles
     for particle in particles[:]:
         particle.draw(screen)
     for sw in shockwaves:
         sw.draw(screen)
 
-    # --- Player (triangle ship) --------------------------------------------------
+    # Player
     if player_invincible and int(player_invincible_time * 10) % 2:
-        # During invincibility we draw a blinking warp-glow and a distorted triangle
         pygame.draw.circle(screen, NEON_PINK, (player.centerx, player.centery), 60, 2)
         pygame.draw.circle(screen, NEON_PINK, (player.centerx, player.centery), 50, 1)
-        pygame.draw.polygon(
-            screen,
-            NEON_PINK,
-            [
-                (player.centerx, player.top + shake_x),
-                (player.right, player.centery + shake_y),
-                (player.centerx, player.bottom + shake_x),
-                (player.left, player.centery + shake_y),
-            ],
-        )
-        # Warp particles (sparks) around player
+        pygame.draw.polygon(screen, NEON_PINK, [(player.centerx, player.top + shake_x), (player.right, player.centery + shake_y), (player.centerx, player.bottom + shake_x), (player.left, player.centery + shake_y)])
         if random.random() < 0.3:
-            particles.append(
-                Particle(
-                    player.centerx + random.randint(-40, 40),
-                    player.centery + random.randint(-40, 40),
-                    random.uniform(-2, 2),
-                    random.uniform(-2, 2),
-                    lifetime=20,
-                    color=NEON_PINK,
-                )
-            )
+            particles.append(Particle(player.centerx + random.randint(-40, 40), player.centery + random.randint(-40, 40), random.uniform(-2, 2), random.uniform(-2, 2), lifetime=20, color=NEON_PINK))
     else:
-        pygame.draw.polygon(
-            screen,
-            CYAN,
-            [
-                (player.centerx, player.top + shake_x),
-                (player.right, player.centery + shake_y),
-                (player.centerx, player.bottom + shake_x),
-                (player.left, player.centery + shake_y),
-            ],
-        )
+        pygame.draw.polygon(screen, CYAN, [(player.centerx, player.top + shake_x), (player.right, player.centery + shake_y), (player.centerx, player.bottom + shake_x), (player.left, player.centery + shake_y)])
 
     if player_shield:
         pygame.draw.circle(screen, SHIELD_COLOR, player.center, 60, 3)
 
-    # Orbital charge-up cue (visual feedback while waiting for beam)
+    # Orbital cue
     if orbital_charging and int(orbital_charge_time * 10) % 2:
         pygame.draw.circle(screen, (255, 200, 50), (player.centerx, player.centery), 70, 3)
         pygame.draw.circle(screen, (255, 200, 50), (player.centerx, player.centery), 55, 1)
 
-    # --- Enemies & powerups ------------------------------------------------------
+    # Enemies & powerups
     for enemy in enemies:
         enemy.draw(screen)
-
     for powerup in powerups:
         powerup.draw(screen)
 
-    # --- Orbital beam (cone) -----------------------------------------------------
+    # Plasma ring
+    if plasma_active:
+        ring_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.circle(ring_surf, (0, 255, 255, 180), player.center, int(plasma_radius), 6)
+        inner = max(1, int(plasma_radius * 0.65))
+        pygame.draw.circle(ring_surf, (200, 255, 255, 80), player.center, inner, 2)
+        screen.blit(ring_surf, (0, 0))
+        if random.random() < 0.6:
+            angle = random.random() * math.tau
+            px = player.centerx + math.cos(angle) * plasma_radius
+            py = player.centery + math.sin(angle) * plasma_radius
+            particles.append(Particle(px, py, random.uniform(-0.8, 0.8), random.uniform(-0.8, 0.8), lifetime=20, color=(0, 255, 255)))
+
+    # Orbital beam
     if orbital_beam_active:
         beam_x = player.centerx
         beam_top = 0
         beam_bottom = player.top
-        cone_width_bottom = 40   # narrow near the player
-        cone_width_top = WIDTH   # wide at the top edge
-
-        cone_points = [
-            (beam_x - cone_width_bottom // 2, beam_bottom),
-            (beam_x + cone_width_bottom // 2, beam_bottom),
-            (beam_x + cone_width_top // 2, beam_top),
-            (beam_x - cone_width_top // 2, beam_top),
-        ]
-
+        cone_width_bottom = 40
+        cone_width_top = WIDTH
+        cone_points = [(beam_x - cone_width_bottom // 2, beam_bottom), (beam_x + cone_width_bottom // 2, beam_bottom), (beam_x + cone_width_top // 2, beam_top), (beam_x - cone_width_top // 2, beam_top)]
         beam_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         pygame.draw.polygon(beam_surf, (255, 255, 255, 200), cone_points)
         pygame.draw.polygon(beam_surf, (200, 200, 255, 120), cone_points, 3)
         screen.blit(beam_surf, (0, 0))
 
-    # --- Missiles (player shots) -------------------------------------------------
+    # Missiles
     for missile in missiles:
-        pygame.draw.line(screen, NEON_GREEN, (missile.centerx, missile.top), (missile.centerx, missile.bottom), 3)
-        pygame.draw.circle(screen, NEON_GREEN, missile.center, 2)
+        bullet_color = CYAN if overdrive_active else NEON_GREEN
+        pygame.draw.line(screen, bullet_color, (missile.centerx, missile.top), (missile.centerx, missile.bottom), 3)
+        pygame.draw.circle(screen, bullet_color, missile.center, 2)
 
-    # --- HUD (score + lives + timers) -------------------------------------------
+    # HUD
     score_text = font.render(f"SCORE: {score}", True, NEON_GREEN)
     lives_text = font.render(f"SHIPS: {lives}", True, RED)
     high_score_text = small_font.render(f"HIGH: {high_score}", True, CYAN)
@@ -494,36 +453,56 @@ def draw_window():
     if player_shield:
         shield_text = small_font.render(f"SHIELD: {player_shield_time:.1f}s", True, SHIELD_COLOR)
         screen.blit(shield_text, (10, 40))
-
     if rapid_fire:
         rapid_text = small_font.render(f"BURST: {rapid_fire_time:.1f}s", True, NEON_GREEN)
         screen.blit(rapid_text, (10, 60))
-
     if player_invincible:
         inv_text = small_font.render(f"WARP: {player_invincible_time:.1f}s", True, NEON_PINK)
         screen.blit(inv_text, (10, 80))
-
     if orbital_charging:
         orbital_text = small_font.render(f"CHARGING: {orbital_charge_time:.1f}s", True, (255, 200, 50))
         screen.blit(orbital_text, (10, 100))
 
-    # CRT overlay (last, so it sits on top of everything)
-    screen.blit(crt_surface, (0, 0))
+    # Cutter timers
+    if 'cutter_charging' in globals() and cutter_charging:
+        cutter_charge_text = small_font.render(f"CUTTER CHARGE: {cutter_charge_time:.1f}s", True, (200, 200, 255))
+        screen.blit(cutter_charge_text, (10, 120))
+    if 'cutter_active' in globals() and cutter_active:
+        cutter_active_text = small_font.render(f"CUTTER ACTIVE: {cutter_active_time:.1f}s", True, (180, 220, 255))
+        screen.blit(cutter_active_text, (10, 140))
 
+    # Overdrive UI & cooldown
+    if overdrive_ready:
+        ready_text = small_font.render("OVERDRIVE READY", True, CYAN)
+        screen.blit(ready_text, (10, 160))
+    if overdrive_active:
+        active_text = small_font.render(f"OVERDRIVE: {overdrive_timer:.1f}s", True, CYAN)
+        screen.blit(active_text, (10, 180))
+    if overdrive_on_cooldown:
+        cd_text = small_font.render(f"OVR CD: {overdrive_cd_timer:.1f}s", True, (180, 180, 255))
+        screen.blit(cd_text, (10, 200))
+
+    # Overdrive aura (glowing pulse)
+    if overdrive_active:
+        aura_surf = pygame.Surface((200, 200), pygame.SRCALPHA)
+        pulse = 120 + int(80 * math.sin((5.0 - overdrive_timer) * 6.28)) if overdrive_timer > 0 else 120
+        pygame.draw.circle(aura_surf, (0, 200, 255, max(30, min(180, pulse))), (100, 100), 90)
+        screen.blit(aura_surf, (player.centerx - 100, player.centery - 100), special_flags=pygame.BLEND_RGBA_ADD)
+
+    # CRT overlay
+    screen.blit(crt_surface, (0, 0))
     pygame.display.update()
 
-    # Gradually decay shake so it feels like a short impact
     screen_shake = max(0, screen_shake - 1)
 
 
-# --- Menus ----------------------------------------------------------------------
+# --- Menus
 def draw_game_over():
     screen.fill(BLACK_SPACE)
     game_over_text = large_font.render("MISSION FAILED", True, RED)
     final_score_text = font.render(f"FINAL SCORE: {score}", True, NEON_GREEN)
     high_score_text = font.render(f"HIGH SCORE: {high_score}", True, CYAN)
     restart_text = font.render("SPACE: Restart  |  Q: Quit", True, WHITE)
-
     screen.blit(game_over_text, (WIDTH // 2 - 160, HEIGHT // 2 - 120))
     screen.blit(final_score_text, (WIDTH // 2 - 150, HEIGHT // 2 - 20))
     screen.blit(high_score_text, (WIDTH // 2 - 160, HEIGHT // 2 + 20))
@@ -540,12 +519,14 @@ def draw_pause():
     pygame.display.update()
 
 
-# --- Reset (new run) ------------------------------------------------------------
+# --- Reset
 def reset_game():
     global score, lives, enemy_speed, spawn_rate, game_state, high_score
     global player_shield, player_shield_time, player_invincible, player_invincible_time
     global rapid_fire, rapid_fire_time, rapid_fire_counter
     global orbital_count, orbital_beam_active, orbital_charging, orbital_charge_time
+    global plasma_active, plasma_radius, plasma_hits
+    global overdrive_points, overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
 
     score = 0
     lives = 3
@@ -575,24 +556,35 @@ def reset_game():
     orbital_charge_time = 0
     orbital_beam_active = False
 
+    plasma_active = False
+    plasma_radius = 0.0
+    plasma_hits.clear()
+
+    overdrive_points = 0
+    overdrive_ready = False
+    overdrive_active = False
+    overdrive_timer = 0.0
+    overdrive_on_cooldown = False
+    overdrive_cd_timer = 0.0
+
     game_state = PLAYING
 
 
-# --- Main game loop --------------------------------------------------------------
+# --- Main loop
 def main():
     global score, lives, enemy_speed, spawn_rate, game_state, high_score, screen_shake
     global player_shield, player_shield_time, player_invincible, player_invincible_time
     global rapid_fire, rapid_fire_time, rapid_fire_counter
-
     global orbital_count, orbital_charging, orbital_charge_duration, orbital_charge_time
     global orbital_beam_active, orbital_beam_time, orbital_beam_duration, orbital_beam_width
+    global plasma_active, plasma_radius, plasma_max_radius, plasma_expand_speed, plasma_hits
+    global overdrive_points, overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
 
     running = True
 
     while running:
-        clock.tick(30)  # fixed update rate (30 FPS)
+        clock.tick(30)
 
-        # --- State handling (pause/game over) -----------------------------------
         if game_state == PAUSED:
             draw_pause()
             for event in pygame.event.get():
@@ -614,7 +606,6 @@ def main():
                         running = False
             continue
 
-        # --- Event handling (input) -------------------------------------------
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -623,65 +614,118 @@ def main():
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
                     missiles.append(pygame.Rect(player.centerx - 5, player.top, 10, 20))
-                    play_sound(shoot_sound)
+                    play_sound(overdrive_sound if overdrive_active else shoot_sound)
                 if event.key == pygame.K_p:
                     game_state = PAUSED
+                if event.key == pygame.K_e and overdrive_ready and not overdrive_active and not overdrive_on_cooldown:
+                    overdrive_active = True
+                    overdrive_ready = False
+                    overdrive_points = 0
+                    overdrive_timer = 5.0
+                    play_sound(overdrive_sound)
+                    # small activation burst
+                    for _ in range(12):
+                        particles.append(Particle(player.centerx + random.uniform(-20, 20), player.centery + random.uniform(-20, 20), random.uniform(-3, 3), random.uniform(-3, 3), lifetime=30, color=(0, 230, 255)))
 
-        # --- Timers (power-ups) ------------------------------------------------
+        # Timers
         if player_shield:
             player_shield_time -= 1 / 30
             if player_shield_time <= 0:
                 player_shield = False
-
         if rapid_fire:
             rapid_fire_time -= 1 / 30
             if rapid_fire_time <= 0:
                 rapid_fire = False
-
         if player_invincible:
             player_invincible_time -= 1 / 30
             if player_invincible_time <= 0:
                 player_invincible = False
 
-        # --- Player movement (bounded inside play area) -----------------------
+        # Overdrive timer
+        if overdrive_active:
+            overdrive_timer -= 1 / 30
+            if overdrive_timer <= 0:
+                overdrive_active = False
+                overdrive_on_cooldown = True
+                overdrive_cd_timer = overdrive_cooldown
+        if overdrive_on_cooldown:
+            overdrive_cd_timer -= 1 / 30
+            if overdrive_cd_timer <= 0:
+                overdrive_on_cooldown = False
+                overdrive_cd_timer = 0.0
+
+        # Player movement
         keys = pygame.key.get_pressed()
         moving = False
         if keys[pygame.K_a] and player.left > 0:
-            player.x -= player_speed
+            player.x -= (player_speed + 3 if overdrive_active else player_speed)
             moving = True
         if keys[pygame.K_d] and player.right < WIDTH:
-            player.x += player_speed
+            player.x += (player_speed + 3 if overdrive_active else player_speed)
             moving = True
-        if keys[pygame.K_w] and player.top > 50:  # keep space for top area / effects
-            player.y -= player_speed
+        if keys[pygame.K_w] and player.top > 50:
+            player.y -= (player_speed + 3 if overdrive_active else player_speed)
             moving = True
         if keys[pygame.K_s] and player.bottom < HEIGHT:
-            player.y += player_speed
+            player.y += (player_speed + 3 if overdrive_active else player_speed)
             moving = True
-
         if moving:
             spawn_thruster()
 
-        # --- Difficulty scaling (simple score-based ramp) ---------------------
+        # Plasma update
+        if plasma_active:
+            plasma_radius += plasma_expand_speed
+            for enemy in enemies[:]:
+                if id(enemy) in plasma_hits:
+                    continue
+                dx = enemy.rect.centerx - player.centerx
+                dy = enemy.rect.centery - player.centery
+                if dx * dx + dy * dy <= (plasma_radius * plasma_radius):
+                    plasma_hits.add(id(enemy))
+                    if enemy.type == EnemyType.CAPITAL:
+                        enemy.health -= enemy.health * 0.5
+                        for _ in range(12):
+                            particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-4, 4), random.uniform(-4, 4), color=(0, 255, 255)))
+                        if enemy.health <= 0:
+                            try:
+                                enemies.remove(enemy)
+                            except ValueError:
+                                pass
+                            score += 3
+                            overdrive_points += 1
+                            if overdrive_points >= 5:
+                                overdrive_ready = True
+                    else:
+                        for _ in range(15):
+                            particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(0, 255, 255)))
+                        try:
+                            enemies.remove(enemy)
+                        except ValueError:
+                            pass
+                        score += 1 if enemy.type == EnemyType.DRONE else 2
+            screen_shake = max(screen_shake, 3)
+            if plasma_radius >= plasma_max_radius:
+                plasma_active = False
+                plasma_hits.clear()
+
+        # Difficulty scaling
         if score > 0 and score % 10 == 0:
             enemy_speed = min(8, 4 + (score // 10) * 0.5)
             spawn_rate = max(15, 25 - (score // 10))
 
-        # --- Enemy spawning --------------------------------------------------
+        # Enemy spawn
         if random.randint(1, spawn_rate) == 1:
             x_pos = random.randint(0, WIDTH - 40)
-            enemy_type_choice = random.choices(
-                [EnemyType.DRONE, EnemyType.FIGHTER, EnemyType.CAPITAL],
-                weights=[50, 30, 20],
-            )[0]
+            enemy_type_choice = random.choices([EnemyType.DRONE, EnemyType.FIGHTER, EnemyType.CAPITAL], weights=[50, 30, 20])[0]
             enemies.append(Enemy(x_pos, 0, enemy_type_choice))
 
-        # --- Enemy movement + player collision --------------------------------
+        # Enemy movement + collision
         for enemy in enemies[:]:
-            # Normal speed selection per enemy type
-            speed = enemy_speed if enemy.type == EnemyType.DRONE else (enemy_speed * 1.5 if enemy.type == EnemyType.FIGHTER else enemy_speed * 0.7)
+            if 'cutter_active' in globals() and cutter_active:
+                speed = enemy_speed * 0.2
+            else:
+                speed = enemy_speed if enemy.type == EnemyType.DRONE else (enemy_speed * 1.5 if enemy.type == EnemyType.FIGHTER else enemy_speed * 0.7)
             enemy.rect.y += speed
-
             if enemy.rect.top > HEIGHT:
                 enemies.remove(enemy)
             elif enemy.rect.colliderect(player):
@@ -690,52 +734,36 @@ def main():
                         player_shield = False
                         play_sound(hit_sound)
                         for _ in range(8):
-                            particles.append(
-                                Particle(
-                                    player.centerx,
-                                    player.centery,
-                                    random.uniform(-3, 3),
-                                    random.uniform(-3, 3),
-                                )
-                            )
+                            particles.append(Particle(player.centerx, player.centery, random.uniform(-3, 3), random.uniform(-3, 3)))
                         enemies.remove(enemy)
                     else:
                         lives -= 1
                         screen_shake = 5
                         play_sound(hit_sound)
                         for _ in range(15):
-                            particles.append(
-                                Particle(
-                                    player.centerx,
-                                    player.centery,
-                                    random.uniform(-5, 5),
-                                    random.uniform(-5, 5),
-                                )
-                            )
+                            particles.append(Particle(player.centerx, player.centery, random.uniform(-5, 5), random.uniform(-5, 5)))
                         enemies.remove(enemy)
                         shockwaves.append(Shockwave(player.centerx, player.centery))
-
                         if lives <= 0:
                             game_state = GAME_OVER
                             if score > high_score:
                                 high_score = score
                                 save_high_score(high_score)
-                            # stop orbital sound if it is playing
                             try:
                                 if globals().get('orbital_sound', None):
                                     globals()['orbital_sound'].stop()
                             except Exception:
                                 pass
 
-        # --- Rapid fire (autoshoot) ------------------------------------------
+        # Rapid fire
         if rapid_fire:
             rapid_fire_counter += 1
             if rapid_fire_counter >= 3:
                 missiles.append(pygame.Rect(player.centerx - 5, player.top, 10, 20))
-                play_sound(rapid_fire_sound if rapid_fire_sound else shoot_sound)
+                play_sound(overdrive_sound if overdrive_active else (rapid_fire_sound if rapid_fire_sound else shoot_sound))
                 rapid_fire_counter = 0
 
-        # --- Power-up collection ------------------------------------------------
+        # Power-up collection
         for powerup in powerups[:]:
             if powerup.rect.colliderect(player):
                 if powerup.type == PowerUpType.SHIELD:
@@ -755,64 +783,48 @@ def main():
                     orbital_count += 1
                     orbital_charging = True
                     orbital_charge_time = orbital_charge_duration
-                    # Player becomes invincible for the full charge+beam window
                     player_invincible = True
                     player_invincible_time = orbital_charge_duration + orbital_beam_duration
+                elif powerup.type == PowerUpType.PLASMA:
+                    play_sound(plasma_sound or powerup_sound)
+                    plasma_active = True
+                    plasma_radius = 1.0
+                    plasma_hits.clear()
                 powerups.remove(powerup)
 
-        # --- Missile collision (simple AABB tests) ------------------------------
+        # Missile collision
         for missile in missiles[:]:
             missile.y -= 8
             if missile.bottom < 0:
                 missiles.remove(missile)
                 continue
-
             for enemy in enemies[:]:
                 if missile.colliderect(enemy.rect):
                     enemy.health -= 1
-
-                    # Explosion sparks
                     for _ in range(10):
-                        particles.append(
-                            Particle(
-                                enemy.rect.centerx,
-                                enemy.rect.centery,
-                                random.uniform(-4, 4),
-                                random.uniform(-4, 4),
-                            )
-                        )
-
+                        particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-4, 4), random.uniform(-4, 4)))
                     if enemy.health <= 0:
                         enemies.remove(enemy)
                         base_score = 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
                         score += base_score
-
-                        # 15% chance to drop a power-up on kill (cutter removed)
+                        if enemy.type == EnemyType.CAPITAL:
+                            overdrive_points += 1
+                            if overdrive_points >= 5:
+                                overdrive_ready = True
                         if random.random() < 0.15:
-                            powerup_type = random.choices(
-                                [
-                                    PowerUpType.SHIELD,
-                                    PowerUpType.RAPID_FIRE,
-                                    PowerUpType.INVINCIBILITY,
-                                    PowerUpType.ORBITAL,
-                                ],
-                                weights=[35, 30, 20, 15],
-                            )[0]
+                            powerup_type = random.choices([PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL, PowerUpType.PLASMA], weights=[30, 25, 20, 15, 10])[0]
                             powerups.append(PowerUp(enemy.rect.centerx, enemy.rect.centery, powerup_type))
-
-                    # Remove the missile after it hits something
                     if missile in missiles:
                         missiles.remove(missile)
                     break
 
-        # --- Particle and shockwave lifecycle cleanup --------------------------
+        # Particle cleanup
         for particle in particles[:]:
             if not particle.update():
                 try:
                     particles.remove(particle)
                 except ValueError:
                     pass
-
         for sw in shockwaves[:]:
             if not sw.update():
                 try:
@@ -820,7 +832,7 @@ def main():
                 except ValueError:
                     pass
 
-        # --- Orbital ability update (charge -> beam) ---------------------------
+        # Orbital update
         if orbital_charging:
             orbital_charge_time -= 1 / 30
             if orbital_charge_time <= 0:
@@ -829,51 +841,33 @@ def main():
                 orbital_beam_time = orbital_beam_duration
                 player_invincible = True
                 player_invincible_time = max(player_invincible_time, orbital_beam_duration)
-
-                # Spawn a small wave of enemies as a "counter-attack" during beam
                 for _ in range(8):
-                    enemy_type = random.choices(
-                        [EnemyType.DRONE, EnemyType.FIGHTER, EnemyType.CAPITAL],
-                        weights=[50, 35, 15],
-                    )[0]
+                    enemy_type = random.choices([EnemyType.DRONE, EnemyType.FIGHTER, EnemyType.CAPITAL], weights=[50, 35, 15])[0]
                     x = random.randint(0, WIDTH - 40)
                     enemies.append(Enemy(x, -40, enemy_type))
 
-        # --- Orbital beam collision (cone test) --------------------------------
         if orbital_beam_active:
             orbital_beam_time -= 1 / 30
-
             cone_width_bottom = 40
             cone_width_top = WIDTH
-
             enemies_hit = []
             for enemy in enemies[:]:
                 enemy_y = enemy.rect.centery
                 if 0 <= enemy_y <= player.top:
-                    progress = 1 - (enemy_y / player.top)  # 0 near player, 1 at top edge
+                    progress = 1 - (enemy_y / player.top)
                     width_at_y = cone_width_bottom + (cone_width_top - cone_width_bottom) * progress
                     cone_x_left = player.centerx - width_at_y / 2
                     cone_x_right = player.centerx + width_at_y / 2
                     if cone_x_left <= enemy.rect.centerx <= cone_x_right:
                         enemies_hit.append(enemy)
                         for _ in range(15):
-                            particles.append(
-                                Particle(
-                                    enemy.rect.centerx,
-                                    enemy.rect.centery,
-                                    random.uniform(-5, 5),
-                                    random.uniform(-5, 5),
-                                    color=(255, 255, 255),
-                                )
-                            )
+                            particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-5, 5), random.uniform(-5, 5), color=(255, 255, 255)))
                         score += 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
-
             for enemy in enemies_hit:
                 try:
                     enemies.remove(enemy)
                 except ValueError:
                     pass
-
             if orbital_beam_time <= 0:
                 orbital_beam_active = False
                 try:
