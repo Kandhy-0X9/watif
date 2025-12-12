@@ -150,6 +150,9 @@ plasma_sound = None
 overdrive_sound = None
 bg_music_file = None
 artillery_sound = None
+support_drone = None
+support_drone_missiles = []
+drone_shoot_sound = None
 
 
 audio_files = [f for f in os.listdir('.') if f.lower().endswith(('.mp3', '.wav', '.ogg'))]
@@ -185,6 +188,10 @@ if audio_files:
     plasma_candidate = pick_file(('plasma', 'blast', 'blaster', 'wave'), exclude=bg_music_file)
     overdrive_candidate = pick_file(('overdrive',), exclude=bg_music_file)
     artillery_candidate = pick_file(('artillery', 'shell', 'bomb', 'strike'), exclude=bg_music_file)
+    drone_candidate = pick_file(('drone', 'mini', 'tiny', 'plink', 'tink', 'ping'))
+
+    if drone_candidate:
+        drone_shoot_sound = load_sound(drone_candidate)
     if not shoot_candidate:
         shoot_candidate = pick_file(('laser', 'shoot', 'gun')) or (audio_files[0] if audio_files else None)
     if not hit_candidate:
@@ -335,6 +342,53 @@ class Enemy:
             pygame.draw.circle(surf, (CYAN[0], CYAN[1], CYAN[2], self.alpha), (self.rect.width // 2, self.rect.height // 2), 12, 2)
 
         surface.blit(surf, self.rect.topleft)
+# --- Support Drone (friendly auto-shooter)
+class SupportDrone:
+    def __init__(self):
+        self.x = player.centerx
+        self.y = player.centery - 140
+        self.orbit_offset = 0.0
+        self.fire_cooldown = 0.0
+        self.fire_delay = 0.45   # shots per second
+
+    def update(self):
+
+        # follow player with smooth motion (above the player)
+        target_x = player.centerx + math.cos(self.orbit_offset) * 45
+        target_y = player.centery - 120 + math.sin(self.orbit_offset) * 10
+
+        self.x += (target_x - self.x) * 0.15
+        self.y += (target_y - self.y) * 0.15
+
+
+        # shooting
+        if self.fire_cooldown > 0:
+            self.fire_cooldown -= 1 / 30
+        else:
+            # find nearest enemy
+            closest = None
+            closest_d = 99999
+            for e in enemies:
+                dx = e.rect.centerx - self.x
+                dy = e.rect.centery - self.y
+                d = dx*dx + dy*dy
+                if d < closest_d:
+                    closest_d = d
+                    closest = e
+
+            # shoot if enemy exists
+            if closest:
+                support_drone_missiles.append(
+                    pygame.Rect(int(self.x)-3, int(self.y)-8, 6, 12)
+                )
+                play_sound(drone_shoot_sound or shoot_sound)
+                self.fire_cooldown = self.fire_delay
+
+
+    def draw(self, surface):
+        # glowing friendly drone
+        pygame.draw.circle(surface, (80, 200, 255), (int(self.x), int(self.y)), 12)
+        pygame.draw.circle(surface, (180, 255, 255), (int(self.x), int(self.y)), 16, 2)
 
 
 enemies = []
@@ -561,6 +615,12 @@ def draw_window():
     if cutter_blades:
         for blade in cutter_blades:
             blade.draw(screen)
+    # Support Drone
+    if support_drone:
+        support_drone.draw(screen)
+    # Draw support drone missiles
+    for m in support_drone_missiles:
+        pygame.draw.rect(screen, (80, 200, 255), m)  # light blue drone bullet
 
     # HUD
     score_text = font.render(f"SCORE: {score}", True, NEON_GREEN)
@@ -847,6 +907,11 @@ def main():
             moving = True
         if moving:
             spawn_thruster()
+        if keys[pygame.K_t]:   # press T to summon support drone
+            global support_drone
+            support_drone = SupportDrone()
+        if support_drone:
+            support_drone.update()
 
         # Plasma update
         if plasma_active:
@@ -1067,6 +1132,27 @@ def main():
                             pass
                     break
 
+        # Support drone missiles
+        for m in support_drone_missiles[:]:
+            m.y -= 10
+            if m.bottom < 0:
+                support_drone_missiles.remove(m)
+                continue
+
+            # collision with enemies
+            for enemy in enemies[:]:
+                if m.colliderect(enemy.rect):
+                    enemy.health -= 0.5  # weaker than player bullet
+                    particles.append(Particle(enemy.rect.centerx, enemy.rect.centery,
+                                            random.uniform(-2,2), random.uniform(-2,2), lifetime=14))
+                    if enemy.health <= 0:
+                        enemies.remove(enemy)
+                        score += 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
+                    try:
+                        support_drone_missiles.remove(m)
+                    except: pass
+                    break
+       
         # Particle cleanup
         for particle in particles[:]:
             if not particle.update():
