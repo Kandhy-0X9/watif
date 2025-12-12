@@ -352,7 +352,7 @@ class SupportDrone:
         self.fire_delay = 0.45   # shots per second
 
     def update(self):
-
+        global score, enemies
         # follow player with smooth motion (above the player)
         target_x = player.centerx + math.cos(self.orbit_offset) * 45
         target_y = player.centery - 120 + math.sin(self.orbit_offset) * 10
@@ -383,6 +383,49 @@ class SupportDrone:
                 )
                 play_sound(drone_shoot_sound or shoot_sound)
                 self.fire_cooldown = self.fire_delay
+        # --- Overdrive pulse attack ---
+        if overdrive_active:
+            if not hasattr(self, 'pulse_cd'):
+                self.pulse_cd = 0.0
+
+            if self.pulse_cd > 0:
+                self.pulse_cd -= 1 / 30
+            else:
+                # radius of the pulse
+                pulse_radius = 140
+
+                # visual burst
+                for _ in range(30):
+                    particles.append(
+                        Particle(
+                            self.x + random.uniform(-10,10),
+                            self.y + random.uniform(-10,10),
+                            random.uniform(-4,4),
+                            random.uniform(-4,4),
+                            lifetime=20,
+                            color=(150, 220, 255)
+                        )
+                    )
+
+                # shockwave ring
+                shockwaves.append(Shockwave(int(self.x), int(self.y)))
+
+                # damage enemies in range
+                for e in enemies[:]:
+                    dx = e.rect.centerx - self.x
+                    dy = e.rect.centery - self.y
+                    if dx*dx + dy*dy <= pulse_radius * pulse_radius:
+                        try:
+                            enemies.remove(e)
+                        except ValueError:
+                            pass
+                        score += 1 if e.type == EnemyType.DRONE else (2 if e.type == EnemyType.FIGHTER else 3)
+
+                # optional sound
+                play_sound(drone_shoot_sound or shoot_sound)
+
+                # cooldown between pulses
+                self.pulse_cd = 0.1 # 0.1 seconds between pulses  
 
 
     def draw(self, surface):
