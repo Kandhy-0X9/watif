@@ -1,3 +1,9 @@
+# copilot.py
+# Starship Defense (single-file Pygame shooter) - Patched with Cutter upgrade
+# - Cutter: pickup → 5s spin of 4 blades (instant-kill on touch) → blades launch outward → explosion radius kills enemies
+# - Preserves all existing systems (plasma, overdrive, orbital, audio auto-detect, particles, shockwaves, HUD, difficulty scaling)
+# - Clean: removed unused old cutter stubs and integrated new system
+
 import pygame
 import random
 import sys
@@ -8,15 +14,14 @@ from enum import Enum
 
 # =============================================================================
 #  Starship Defense (single-file Pygame shooter) - Patched (complete)
-#  - Missile visual upgrades (comet tails + overdrive twin beams + muzzle flash)
-#  - Smooth continuous difficulty scaling
-#  - Per-enemy speed variables
-#  - Overdrive red burning ring (visual + damage)
 # =============================================================================
 
 # --- Pygame init (video + audio)
 pygame.init()
-pygame.mixer.init()
+try:
+    pygame.mixer.init()
+except Exception:
+    pass  # allow running without audio device
 
 # --- Screen setup
 WIDTH, HEIGHT = 1200, 600
@@ -55,6 +60,7 @@ class PowerUpType(Enum):
     INVINCIBILITY = 3
     ORBITAL = 4
     PLASMA = 5
+    CUTTER = 6           # newly added cutter power-up
 
 # --- Particle system
 class Particle:
@@ -275,6 +281,17 @@ overdrive_cooldown = 8.0
 overdrive_on_cooldown = False
 overdrive_cd_timer = 0.0
 
+# --- Cutter (orbiting blades) globals (NEW)
+cutter_active = False
+cutter_active_time = 0.0        # spin duration remaining (seconds)
+cutter_spin_duration = 5.0     # user requested 5 seconds
+cutter_spin_radius = 72        # orbit radius while spinning
+cutter_blade_count = 4
+cutter_blades = []             # list of CutterBlade instances
+blade_launch_speed = 9.0       # speed when blades fling outward
+blade_size = 12                # visual size for blades
+blade_explosion_radius = 72    # big explosion radius on impact (kills enemies)
+
 # --- Enemy entity
 class Enemy:
     def __init__(self, x, y, enemy_type):
@@ -299,6 +316,7 @@ class Enemy:
             pygame.draw.circle(surf, (CYAN[0], CYAN[1], CYAN[2], self.alpha), (self.rect.width // 2, self.rect.height // 2), 12, 2)
 
         surface.blit(surf, self.rect.topleft)
+
 
 enemies = []
 enemy_speed = 4
@@ -327,6 +345,14 @@ class PowerUp:
             pygame.draw.rect(surface, (30, 30, 40), self.rect)
             pygame.draw.circle(surface, (0, 200, 200), self.rect.center, 9, 2)
             pygame.draw.circle(surface, WHITE, self.rect.center, 5)
+        elif self.type == PowerUpType.CUTTER:
+            # Visual: pick a neutral silver/white icon
+            pygame.draw.rect(surface, (180, 180, 200), self.rect)
+            cx, cy = self.rect.center
+            # small triangular blade icon
+            pygame.draw.polygon(surface, WHITE, [(cx - 6, cy + 6), (cx + 10, cy), (cx - 6, cy - 6)])
+            pygame.draw.circle(surface, (220, 220, 220), self.rect.center, 5, 1)
+
 
 powerups = []
 
@@ -361,6 +387,48 @@ def spawn_thruster():
     for _ in range(2):
         particles.append(Particle(player.centerx + random.randint(-6, 6), player.bottom + random.randint(0, 4), random.uniform(-0.8, 0.8), random.uniform(1.8, 3.2), lifetime=18, color=(150, 200, 255)))
 
+# --- CutterBlade class (NEW)
+class CutterBlade:
+    def __init__(self, angle, radius=cutter_spin_radius):
+        self.angle = angle        # current angle (radians)
+        self.radius = radius      # orbit radius while spinning
+        self.state = 'orbit'      # 'orbit' or 'launched'
+        self.x = player.centerx + math.cos(self.angle) * self.radius
+        self.y = player.centery + math.sin(self.angle) * self.radius
+        self.vx = 0.0
+        self.vy = 0.0
+        self.size = blade_size
+        self.rect = pygame.Rect(int(self.x - self.size//2), int(self.y - self.size//2), self.size, self.size)
+
+    def update_orbit(self, spin_speed=0.16):
+        # spin_speed is radians per frame (approx for 30 fps)
+        self.angle += spin_speed
+        self.x = player.centerx + math.cos(self.angle) * self.radius
+        self.y = player.centery + math.sin(self.angle) * self.radius
+        self.rect.center = (int(self.x), int(self.y))
+
+    def launch(self):
+        # outward velocity based on current angle
+        self.state = 'launched'
+        self.vx = math.cos(self.angle) * blade_launch_speed
+        self.vy = math.sin(self.angle) * blade_launch_speed
+
+    def update_launched(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.rect.center = (int(self.x), int(self.y))
+
+    def draw(self, surface):
+        # draw a small rotating shard / blade with simple triangle
+        surf = pygame.Surface((self.size * 2, self.size * 2), pygame.SRCALPHA)
+        pts = [(self.size, 0), (self.size*2 - 2, self.size), (2, self.size)]
+        pygame.draw.polygon(surf, (200, 220, 255, 220), pts)
+        pygame.draw.polygon(surf, (255,255,255,80), pts, 1)
+        rot = pygame.transform.rotate(surf, (self.angle * 180 / math.pi) % 360)
+        rrect = rot.get_rect(center=(int(self.x), int(self.y)))
+        surface.blit(rot, rrect.topleft)
+
+
 # --- Draw frame
 def draw_window():
     global screen_shake, plasma_active, plasma_radius
@@ -387,7 +455,7 @@ def draw_window():
         screen.blit(glow_surf, (int(s[0]) - glow_size, int(s[1]) - glow_size))
 
     # Particles
-    for particle in particles[:]:
+    for particle in particles:
         particle.draw(screen)
     for sw in shockwaves:
         sw.draw(screen)
@@ -463,6 +531,11 @@ def draw_window():
             pygame.draw.line(screen, CYAN, (missile.centerx - 3, missile.bottom), (missile.centerx - 3, missile.top - 6), 2)
             pygame.draw.line(screen, CYAN, (missile.centerx + 3, missile.bottom), (missile.centerx + 3, missile.top - 6), 2)
 
+    # Cutter blades (draw after player so they appear around the ship)
+    if cutter_blades:
+        for blade in cutter_blades:
+            blade.draw(screen)
+
     # HUD
     score_text = font.render(f"SCORE: {score}", True, NEON_GREEN)
     lives_text = font.render(f"SHIPS: {lives}", True, RED)
@@ -485,12 +558,9 @@ def draw_window():
         screen.blit(orbital_text, (10, 100))
 
     # Cutter timers
-    if 'cutter_charging' in globals() and cutter_charging:
-        cutter_charge_text = small_font.render(f"CUTTER CHARGE: {cutter_charge_time:.1f}s", True, (200, 200, 255))
-        screen.blit(cutter_charge_text, (10, 120))
-    if 'cutter_active' in globals() and cutter_active:
+    if cutter_active:
         cutter_active_text = small_font.render(f"CUTTER ACTIVE: {cutter_active_time:.1f}s", True, (180, 220, 255))
-        screen.blit(cutter_active_text, (10, 140))
+        screen.blit(cutter_active_text, (10, 120))
 
     # Overdrive UI & cooldown
     if overdrive_ready:
@@ -503,7 +573,7 @@ def draw_window():
         cd_text = small_font.render(f"OVR CD: {overdrive_cd_timer:.1f}s", True, (180, 180, 255))
         screen.blit(cd_text, (10, 200))
 
-    # Overdrive aura: red burning ring
+    # Overdrive aura: red burning ring (visual + damage region drawn elsewhere)
     if overdrive_active:
         burn_radius = 90
         aura_surf = pygame.Surface((200, 200), pygame.SRCALPHA)
@@ -515,6 +585,7 @@ def draw_window():
     pygame.display.update()
 
     screen_shake = max(0, screen_shake - 1)
+
 
 # --- Menus
 def draw_game_over():
@@ -547,6 +618,7 @@ def reset_game():
     global orbital_count, orbital_beam_active, orbital_charging, orbital_charge_time
     global plasma_active, plasma_radius, plasma_hits
     global overdrive_points, overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
+    global cutter_active, cutter_active_time, cutter_blades
 
     score = 0
     lives = 3
@@ -587,6 +659,10 @@ def reset_game():
     overdrive_on_cooldown = False
     overdrive_cd_timer = 0.0
 
+    cutter_active = False
+    cutter_active_time = 0.0
+    cutter_blades.clear()
+
     game_state = PLAYING
 
 
@@ -599,6 +675,7 @@ def main():
     global orbital_beam_active, orbital_beam_time, orbital_beam_duration, orbital_beam_width
     global plasma_active, plasma_radius, plasma_max_radius, plasma_expand_speed, plasma_hits
     global overdrive_points, overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
+    global cutter_active, cutter_active_time, cutter_spin_duration, cutter_blades
 
     running = True
 
@@ -731,7 +808,7 @@ def main():
                 plasma_active = False
                 plasma_hits.clear()
 
-        # Smooth continuous difficulty scaling (replaces discrete jumps)
+        # Smooth continuous difficulty scaling
         enemy_speed = min(9, 4 + score * 0.03)
         spawn_rate = max(6, int(25 - score * 0.12))
 
@@ -748,7 +825,7 @@ def main():
             fighter_speed = enemy_speed * 1.5
             capital_speed = enemy_speed * 0.7
 
-            if 'cutter_active' in globals() and cutter_active:
+            if cutter_active:
                 speed = enemy_speed * 0.2
             else:
                 if enemy.type == EnemyType.DRONE:
@@ -760,7 +837,10 @@ def main():
 
             enemy.rect.y += speed
             if enemy.rect.top > HEIGHT:
-                enemies.remove(enemy)
+                try:
+                    enemies.remove(enemy)
+                except ValueError:
+                    pass
             elif enemy.rect.colliderect(player):
                 if not player_invincible:
                     if player_shield:
@@ -768,14 +848,20 @@ def main():
                         play_sound(hit_sound)
                         for _ in range(8):
                             particles.append(Particle(player.centerx, player.centery, random.uniform(-3, 3), random.uniform(-3, 3)))
-                        enemies.remove(enemy)
+                        try:
+                            enemies.remove(enemy)
+                        except ValueError:
+                            pass
                     else:
                         lives -= 1
                         screen_shake = 5
                         play_sound(hit_sound)
                         for _ in range(15):
                             particles.append(Particle(player.centerx, player.centery, random.uniform(-5, 5), random.uniform(-5, 5)))
-                        enemies.remove(enemy)
+                        try:
+                            enemies.remove(enemy)
+                        except ValueError:
+                            pass
                         shockwaves.append(Shockwave(player.centerx, player.centery))
                         if lives <= 0:
                             game_state = GAME_OVER
@@ -788,7 +874,7 @@ def main():
                             except Exception:
                                 pass
 
-        # --- Overdrive burning ring damage (applies to enemies inside the red aura)
+        # --- Overdrive burning ring damage
         if overdrive_active:
             burn_radius = 90
             for enemy in enemies[:]:
@@ -796,9 +882,7 @@ def main():
                 dy = enemy.rect.centery - player.centery
                 dist_sq = dx * dx + dy * dy
                 if dist_sq <= burn_radius * burn_radius:
-                    # continuous burn damage per frame
-                    enemy.health -= 0.18  # tuned to be noticeable but not insta-kill
-                    # burn particles (embers)
+                    enemy.health -= 0.18
                     if random.random() < 0.35:
                         particles.append(Particle(enemy.rect.centerx + random.uniform(-6, 6),
                                                  enemy.rect.centery + random.uniform(-6, 6),
@@ -806,7 +890,6 @@ def main():
                                                  random.uniform(-2, 2),
                                                  lifetime=14,
                                                  color=(255, 80, 30)))
-                    # if killed, reward score and small overdrive points
                     if enemy.health <= 0:
                         try:
                             enemies.remove(enemy)
@@ -852,7 +935,19 @@ def main():
                     plasma_active = True
                     plasma_radius = 1.0
                     plasma_hits.clear()
-                powerups.remove(powerup)
+                elif powerup.type == PowerUpType.CUTTER:
+                    # activate cutter: begin spinning immediately for cutter_spin_duration
+                    play_sound(powerup_sound or overdrive_sound)
+                    cutter_blades.clear()
+                    for i in range(cutter_blade_count):
+                        ang = (i / cutter_blade_count) * math.tau
+                        cutter_blades.append(CutterBlade(ang))
+                    cutter_active = True
+                    cutter_active_time = cutter_spin_duration
+                try:
+                    powerups.remove(powerup)
+                except ValueError:
+                    pass
 
         # Missile collision & movement
         for missile in missiles[:]:
@@ -880,7 +975,10 @@ def main():
                             if overdrive_points >= 5:
                                 overdrive_ready = True
                         if random.random() < 0.15:
-                            powerup_type = random.choices([PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL, PowerUpType.PLASMA], weights=[50, 20, 20, 10, 70])[0]
+                            powerup_type = random.choices(
+                                [PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL, PowerUpType.PLASMA, PowerUpType.CUTTER],
+                                weights=[40, 18, 18, 8, 60, 12]
+                            )[0]
                             powerups.append(PowerUp(enemy.rect.centerx, enemy.rect.centery, powerup_type))
                     if missile in missiles:
                         try:
@@ -946,6 +1044,74 @@ def main():
                         globals()['orbital_sound'].stop()
                 except Exception:
                     pass
+
+        # --- Cutter update (orbiting blades + launch & explosion)
+        if cutter_active:
+            # spin phase
+            if cutter_active_time > 0:
+                cutter_active_time -= 1 / 30
+                for blade in cutter_blades[:]:
+                    if blade.state == 'orbit':
+                        blade.update_orbit(spin_speed=0.16)
+                        # instant destroy enemies that touch the blade while orbiting
+                        for enemy in enemies[:]:
+                            if blade.rect.colliderect(enemy.rect):
+                                try:
+                                    enemies.remove(enemy)
+                                except ValueError:
+                                    pass
+                                for _ in range(12):
+                                    particles.append(Particle(enemy.rect.centerx, enemy.rect.centery, random.uniform(-4,4), random.uniform(-4,4)))
+                                score += 1 if enemy.type == EnemyType.DRONE else (2 if enemy.type == EnemyType.FIGHTER else 3)
+                # if timer just reached 0, launch blades
+                if cutter_active_time <= 0:
+                    for blade in cutter_blades:
+                        blade.launch()
+                    play_sound(overdrive_sound if overdrive_active else powerup_sound)
+            else:
+                # launched phase
+                for blade in cutter_blades[:]:
+                    if blade.state == 'launched':
+                        blade.update_launched()
+                        # out of bounds removal
+                        if blade.x < -50 or blade.x > WIDTH + 50 or blade.y < -50 or blade.y > HEIGHT + 50:
+                            try:
+                                cutter_blades.remove(blade)
+                            except ValueError:
+                                pass
+                            continue
+                        # check collision with enemies -> big explosion
+                        collision_occurred = False
+                        for enemy in enemies[:]:
+                            if blade.rect.colliderect(enemy.rect):
+                                collision_occurred = True
+                                ex = int(blade.x)
+                                ey = int(blade.y)
+                                # explosion visuals
+                                for _ in range(30):
+                                    particles.append(Particle(ex + random.uniform(-8,8), ey + random.uniform(-8,8), random.uniform(-5,5), random.uniform(-5,5), lifetime=30, color=(255,180,60)))
+                                shockwaves.append(Shockwave(ex, ey))
+                                # remove/damage enemies within radius
+                                for e in enemies[:]:
+                                    dx = e.rect.centerx - ex
+                                    dy = e.rect.centery - ey
+                                    if dx*dx + dy*dy <= blade_explosion_radius * blade_explosion_radius:
+                                        try:
+                                            enemies.remove(e)
+                                        except ValueError:
+                                            pass
+                                        score += 1 if e.type == EnemyType.DRONE else (2 if e.type == EnemyType.FIGHTER else 3)
+                                # remove blade after explosion
+                                try:
+                                    cutter_blades.remove(blade)
+                                except ValueError:
+                                    pass
+                                break
+                        # if no immediate collision, blade continues until out of bounds
+                # if all blades gone -> deactivate cutter
+                if not cutter_blades:
+                    cutter_active = False
+                    cutter_active_time = 0.0
 
         draw_window()
 
