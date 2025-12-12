@@ -1,8 +1,9 @@
 # copilot.py
-# Starship Defense (single-file Pygame shooter) - Patched with Cutter upgrade
+# Starship Defense (single-file Pygame shooter) - Patched with Cutter + Artillery
 # - Cutter: pickup → 5s spin of 4 blades (instant-kill on touch) → blades launch outward → explosion radius kills enemies
+# - Artillery: rare pickup → press R to target (full freeze) → click to choose impact → game resumes → shell hits after 0.5s → huge explosion (can kill player)
 # - Preserves all existing systems (plasma, overdrive, orbital, audio auto-detect, particles, shockwaves, HUD, difficulty scaling)
-# - Clean: removed unused old cutter stubs and integrated new system
+# - Clean: integrated new artillery system and added power-up spawn weight
 
 import pygame
 import random
@@ -61,6 +62,7 @@ class PowerUpType(Enum):
     ORBITAL = 4
     PLASMA = 5
     CUTTER = 6           # newly added cutter power-up
+    ARTILLERY = 7        # newly added artillery power-up
 
 # --- Particle system
 class Particle:
@@ -147,6 +149,8 @@ orbital_sound = None
 plasma_sound = None
 overdrive_sound = None
 bg_music_file = None
+artillery_sound = None
+
 
 audio_files = [f for f in os.listdir('.') if f.lower().endswith(('.mp3', '.wav', '.ogg'))]
 if audio_files:
@@ -180,7 +184,7 @@ if audio_files:
     orbital_candidate = pick_file(('orbital', 'orb', 'satellite', 'deploy', 'launch'), exclude=bg_music_file)
     plasma_candidate = pick_file(('plasma', 'blast', 'blaster', 'wave'), exclude=bg_music_file)
     overdrive_candidate = pick_file(('overdrive',), exclude=bg_music_file)
-
+    artillery_candidate = pick_file(('artillery', 'shell', 'bomb', 'strike'), exclude=bg_music_file)
     if not shoot_candidate:
         shoot_candidate = pick_file(('laser', 'shoot', 'gun')) or (audio_files[0] if audio_files else None)
     if not hit_candidate:
@@ -191,7 +195,7 @@ if audio_files:
         warp_candidate = pick_file(('warp', 'invinc', 'invulnerability'), exclude=bg_music_file)
     if not rapid_candidate:
         rapid_candidate = pick_file(('burst', 'rapid'))
-
+    
     if shoot_candidate:
         shoot_sound = load_sound(shoot_candidate)
     if hit_candidate:
@@ -222,6 +226,11 @@ if audio_files:
         overdrive_sound = load_sound(overdrive_candidate)
     else:
         overdrive_sound = None
+    # Load explosion sound manually
+    if artillery_candidate:
+        artillery_sound = load_sound("strike.mp3")
+    else:
+        artillery_sound = None
 
 # --- High score persistence
 SCORE_FILE = "highscore.json"
@@ -292,6 +301,16 @@ blade_launch_speed = 9.0       # speed when blades fling outward
 blade_size = 12                # visual size for blades
 blade_explosion_radius = 72    # big explosion radius on impact (kills enemies)
 
+# --- Artillery globals (NEW)
+artillery_available = 0        # number of artillery charges the player has
+artillery_targeting = False    # true while the game is frozen and player picks a target
+artillery_pending = False      # true after target picked, countdown until impact
+artillery_target_pos = (0, 0)
+artillery_drop_delay = 0.5     # user requested 0.5s delay after click
+artillery_drop_timer = 0.0
+artillery_radius = 240         # user requested HUGE radius (240 px)
+artillery_activation_key = pygame.K_r
+
 # --- Enemy entity
 class Enemy:
     def __init__(self, x, y, enemy_type):
@@ -352,6 +371,13 @@ class PowerUp:
             # small triangular blade icon
             pygame.draw.polygon(surface, WHITE, [(cx - 6, cy + 6), (cx + 10, cy), (cx - 6, cy - 6)])
             pygame.draw.circle(surface, (220, 220, 220), self.rect.center, 5, 1)
+        elif self.type == PowerUpType.ARTILLERY:
+            # Visual: a simple artillery icon (crosshair + dot)
+            pygame.draw.rect(surface, (160, 160, 200), self.rect)
+            cx, cy = self.rect.center
+            pygame.draw.circle(surface, RED, (cx, cy), 4)
+            pygame.draw.line(surface, WHITE, (cx - 6, cy), (cx + 6, cy), 1)
+            pygame.draw.line(surface, WHITE, (cx, cy - 6), (cx, cy + 6), 1)
 
 
 powerups = []
@@ -573,6 +599,21 @@ def draw_window():
         cd_text = small_font.render(f"OVR CD: {overdrive_cd_timer:.1f}s", True, (180, 180, 255))
         screen.blit(cd_text, (10, 200))
 
+    # Artillery HUD
+    artillery_text = small_font.render(f"ARTILLERY: {artillery_available}", True, (255, 200, 80))
+    screen.blit(artillery_text, (10, 220))
+
+    # Artillery targeting crosshair (when frozen targeting)
+    if artillery_targeting:
+        mx, my = pygame.mouse.get_pos()
+        cx, cy = mx, my
+        # red crosshair
+        pygame.draw.line(screen, RED, (cx - 12, cy), (cx + 12, cy), 2)
+        pygame.draw.line(screen, RED, (cx, cy - 12), (cx, cy + 12), 2)
+        pygame.draw.circle(screen, (255, 100, 100), (cx, cy), 6, 2)
+        target_hint = small_font.render("Click to confirm artillery strike", True, RED)
+        screen.blit(target_hint, (cx + 16, cy - 8))
+
     # Overdrive aura: red burning ring (visual + damage region drawn elsewhere)
     if overdrive_active:
         burn_radius = 90
@@ -619,6 +660,7 @@ def reset_game():
     global plasma_active, plasma_radius, plasma_hits
     global overdrive_points, overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
     global cutter_active, cutter_active_time, cutter_blades
+    global artillery_available, artillery_targeting, artillery_pending, artillery_drop_timer
 
     score = 0
     lives = 3
@@ -663,6 +705,11 @@ def reset_game():
     cutter_active_time = 0.0
     cutter_blades.clear()
 
+    artillery_available = 0
+    artillery_targeting = False
+    artillery_pending = False
+    artillery_drop_timer = 0.0
+
     game_state = PLAYING
 
 
@@ -676,6 +723,7 @@ def main():
     global plasma_active, plasma_radius, plasma_max_radius, plasma_expand_speed, plasma_hits
     global overdrive_points, overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
     global cutter_active, cutter_active_time, cutter_spin_duration, cutter_blades
+    global artillery_available, artillery_targeting, artillery_pending, artillery_target_pos, artillery_drop_timer
 
     running = True
 
@@ -709,7 +757,7 @@ def main():
                 pygame.quit()
                 sys.exit()
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
+                if event.key == pygame.K_SPACE and not artillery_targeting:
                     # fire missile
                     missiles.append(pygame.Rect(player.centerx - 5, player.top, 10, 20))
                     play_sound(overdrive_sound if overdrive_active else shoot_sound)
@@ -717,7 +765,7 @@ def main():
                     particles.append(Particle(player.centerx, player.top, random.uniform(-1, 1), -3, lifetime=12, color=(255, 255, 200)))
                 if event.key == pygame.K_p:
                     game_state = PAUSED
-                if event.key == pygame.K_e and overdrive_ready and not overdrive_active and not overdrive_on_cooldown:
+                if event.key == pygame.K_e and overdrive_ready and not overdrive_active and not overdrive_on_cooldown and not artillery_targeting:
                     overdrive_active = True
                     overdrive_ready = False
                     overdrive_points = 0
@@ -726,6 +774,34 @@ def main():
                     # small activation burst
                     for _ in range(12):
                         particles.append(Particle(player.centerx + random.uniform(-20, 20), player.centery + random.uniform(-20, 20), random.uniform(-3, 3), random.uniform(-3, 3), lifetime=30, color=(0, 230, 255)))
+                if event.key == artillery_activation_key and artillery_available > 0 and not artillery_targeting and not artillery_pending and game_state == PLAYING:
+                    # begin targeting: freeze the game visually and stop updates
+                    artillery_targeting = True
+                    # capture mouse so player can choose
+                    pygame.mouse.set_visible(True)
+                    play_sound(powerup_sound or overdrive_sound)
+
+            # Mouse click handling during targeting
+            if event.type == pygame.MOUSEBUTTONDOWN and artillery_targeting:
+                mx, my = pygame.mouse.get_pos()
+                artillery_target_pos = (mx, my)
+                artillery_pending = True
+                artillery_drop_timer = artillery_drop_delay
+                artillery_targeting = False
+                artillery_available = max(0, artillery_available - 1)
+                # unhide/hide mouse as desired
+                pygame.mouse.set_visible(False)
+                # small confirmation burst on click (visual)
+                for _ in range(8):
+                    particles.append(Particle(mx + random.uniform(-8,8), my + random.uniform(-8,8), random.uniform(-2,2), random.uniform(-2,2), lifetime=18, color=(255,180,60)))
+                # resume the game (updates continue)
+
+        # If we're currently in targeting mode, we must render the frozen frame and skip all updates.
+        if artillery_targeting:
+            # draw the window (it will render current state + crosshair because draw_window uses artillery_targeting flag)
+            draw_window()
+            # do not progress game timers, enemy movement, particles, missiles, etc. (they appear frozen on screen)
+            continue
 
         # Timers
         if player_shield:
@@ -944,6 +1020,10 @@ def main():
                         cutter_blades.append(CutterBlade(ang))
                     cutter_active = True
                     cutter_active_time = cutter_spin_duration
+                elif powerup.type == PowerUpType.ARTILLERY:
+                    # give the player one artillery charge
+                    play_sound(powerup_sound or overdrive_sound)
+                    artillery_available += 1
                 try:
                     powerups.remove(powerup)
                 except ValueError:
@@ -974,10 +1054,10 @@ def main():
                             overdrive_points += 1
                             if overdrive_points >= 5:
                                 overdrive_ready = True
-                        if random.random() < 0.15:
+                        if random.random() < 0.25:
                             powerup_type = random.choices(
-                                [PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL, PowerUpType.PLASMA, PowerUpType.CUTTER],
-                                weights=[40, 18, 18, 8, 60, 12]
+                                [PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL, PowerUpType.PLASMA, PowerUpType.CUTTER, PowerUpType.ARTILLERY],
+                                weights=[100, 60, 40, 10, 100, 50, 15]
                             )[0]
                             powerups.append(PowerUp(enemy.rect.centerx, enemy.rect.centery, powerup_type))
                     if missile in missiles:
@@ -1112,6 +1192,47 @@ def main():
                 if not cutter_blades:
                     cutter_active = False
                     cutter_active_time = 0.0
+
+        # --- Artillery pending impact handling (after target picked)
+        if artillery_pending:
+            artillery_drop_timer -= 1 / 30
+            if artillery_drop_timer <= 0:
+                # Impact now
+                ex, ey = artillery_target_pos
+                # big explosion visuals
+                for _ in range(80):
+                    particles.append(Particle(ex + random.uniform(-24,24), ey + random.uniform(-24,24), random.uniform(-8,8), random.uniform(-8,8), lifetime=40, color=(255,180,60)))
+                shockwaves.append(Shockwave(ex, ey))
+                screen_shake = max(screen_shake, 12)
+                play_sound(artillery_sound or hit_sound)
+                # damage/remove enemies within radius
+                for e in enemies[:]:
+                    dx = e.rect.centerx - ex
+                    dy = e.rect.centery - ey
+                    if dx*dx + dy*dy <= artillery_radius * artillery_radius:
+                        try:
+                            enemies.remove(e)
+                        except ValueError:
+                            pass
+                        score += 1 if e.type == EnemyType.DRONE else (2 if e.type == EnemyType.FIGHTER else 3)
+                # damage player if within radius (can kill player)
+                pdx = player.centerx - ex
+                pdy = player.centery - ey
+                if pdx*pdx + pdy*pdy <= artillery_radius * artillery_radius:
+                    # heavy hit: remove a life and create visual
+                    lives -= 1
+                    for _ in range(20):
+                        particles.append(Particle(player.centerx + random.uniform(-20,20), player.centery + random.uniform(-20,20), random.uniform(-5,5), random.uniform(-5,5), lifetime=30, color=(255,80,20)))
+                    shockwaves.append(Shockwave(player.centerx, player.centery))
+                    play_sound(hit_sound)
+                    if lives <= 0:
+                        game_state = GAME_OVER
+                        if score > high_score:
+                            high_score = score
+                            save_high_score(high_score)
+                # finalize
+                artillery_pending = False
+                artillery_drop_timer = 0.0
 
         draw_window()
 
