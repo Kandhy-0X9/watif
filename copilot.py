@@ -1162,10 +1162,10 @@ def main():
                             overdrive_points += 1
                             if overdrive_points >= 5:
                                 overdrive_ready = True
-                        if random.random() < 0.25:
+                        if random.random() < 1.0:
                             powerup_type = random.choices(
                                 [PowerUpType.SHIELD, PowerUpType.RAPID_FIRE, PowerUpType.INVINCIBILITY, PowerUpType.ORBITAL, PowerUpType.PLASMA, PowerUpType.CUTTER, PowerUpType.ARTILLERY],
-                                weights=[100, 60, 40, 10, 100, 50, 15]
+                                weights=[80, 60, 40, 8, 80, 12, 12]
                             )[0]
                             powerups.append(PowerUp(enemy.rect.centerx, enemy.rect.centery, powerup_type))
                     if missile in missiles:
