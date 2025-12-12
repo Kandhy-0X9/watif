@@ -6,7 +6,7 @@
 # - Clean: integrated new artillery system and added power-up spawn weight
 
 import pygame
-import random
+import random  # restored (shadow bug)
 import sys
 import json
 import os
@@ -1003,6 +1003,19 @@ def main():
             enemies.append(Enemy(x_pos, 0, enemy_type_choice))
 
         # Enemy movement + collision
+        # --- NEW: enemy movement patterns ---
+        for enemy in enemies:
+            # Initialize pattern attributes if missing
+            if not hasattr(enemy, 'pattern'):
+                enemy.pattern = random.choice(['straight','zigzag','dash','circle'])
+                enemy.timer = 0
+                enemy.angle = random.uniform(0, math.tau)
+                enemy.dash_used = False
+                enemy.circle_done = False
+
+            enemy.timer += 1/30
+
+        # Old loop starts here
         for enemy in enemies[:]:
             # per-type speeds
             drone_speed = enemy_speed
@@ -1019,7 +1032,30 @@ def main():
                 else:
                     speed = capital_speed
 
-            enemy.rect.y += speed
+            # === MOVEMENT PATTERNS ===
+            if enemy.pattern == 'straight':
+                enemy.rect.y += speed
+            elif enemy.pattern == 'zigzag':
+                enemy.rect.y += speed
+                enemy.rect.x += math.sin(enemy.timer * 4) * 6
+            elif enemy.pattern == 'dash':
+                if not enemy.dash_used and enemy.rect.centery > HEIGHT * 0.33:
+                    enemy.dash_used = True
+                    enemy.dash_vy = speed * 4
+                if enemy.dash_used:
+                    enemy.rect.y += enemy.dash_vy
+                else:
+                    enemy.rect.y += speed
+            elif enemy.pattern == 'circle':
+                if not enemy.circle_done:
+                    enemy.angle += 0.07
+                    r = 120
+                    enemy.rect.centerx = player.centerx + math.cos(enemy.angle) * r
+                    enemy.rect.centery = player.centery + math.sin(enemy.angle) * r
+                    if enemy.angle > math.tau:
+                        enemy.circle_done = True
+                else:
+                    enemy.rect.y += speed
             if enemy.rect.top > HEIGHT:
                 try:
                     enemies.remove(enemy)
@@ -1371,3 +1407,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
