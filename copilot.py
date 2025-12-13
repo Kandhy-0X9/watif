@@ -737,7 +737,7 @@ def draw_game_over():
     game_over_text = large_font.render("MISSION FAILED", True, RED)
     final_score_text = font.render(f"FINAL SCORE: {score}", True, NEON_GREEN)
     high_score_text = font.render(f"HIGH SCORE: {high_score}", True, CYAN)
-    restart_text = font.render("SPACE: Restart  |  Q: Quit", True, WHITE)
+    restart_text = font.render("SPACE: Restart & Q: Quit", True, WHITE)
     screen.blit(game_over_text, (WIDTH // 2 - 160, HEIGHT // 2 - 120))
     screen.blit(final_score_text, (WIDTH // 2 - 150, HEIGHT // 2 - 20))
     screen.blit(high_score_text, (WIDTH // 2 - 160, HEIGHT // 2 + 20))
