@@ -430,8 +430,9 @@ class SupportDrone:
 
     def draw(self, surface):
         # glowing friendly drone
-        pygame.draw.circle(surface, (80, 200, 255), (int(self.x), int(self.y)), 12)
-        pygame.draw.circle(surface, (180, 255, 255), (int(self.x), int(self.y)), 16, 2)
+        pygame.draw.circle(surface, (255, 80, 80), (int(self.x), int(self.y)), 12)
+        pygame.draw.circle(surface, (255, 160, 160), (int(self.x), int(self.y)), 16, 2)
+
 
 
 enemies = []
@@ -591,7 +592,7 @@ def draw_window():
         if random.random() < 0.3:
             particles.append(Particle(player.centerx + random.randint(-40, 40), player.centery + random.randint(-40, 40), random.uniform(-2, 2), random.uniform(-2, 2), lifetime=20, color=NEON_PINK))
     else:
-        pygame.draw.polygon(screen, CYAN, [(player.centerx, player.top + shake_x), (player.right, player.centery + shake_y), (player.centerx, player.bottom + shake_x), (player.left, player.centery + shake_y)])
+        pygame.draw.polygon(screen, RED, [(player.centerx, player.top + shake_x), (player.right, player.centery + shake_y), (player.centerx, player.bottom + shake_x), (player.left, player.centery + shake_y)])
 
     if player_shield:
         pygame.draw.circle(screen, SHIELD_COLOR, player.center, 60, 3)
