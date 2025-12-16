@@ -317,7 +317,10 @@ artillery_drop_delay = 0.5     # user requested 0.5s delay after click
 artillery_drop_timer = 0.0
 artillery_radius = 240         # user requested HUGE radius (240 px)
 artillery_activation_key = pygame.K_r
-
+# Hack globals (experimental feature)
+hack_mode = False
+hacked_enemy = None
+hack_available = True
 # --- Enemy entity
 class Enemy:
     def __init__(self, x, y, enemy_type):
@@ -601,7 +604,10 @@ def draw_window():
     if orbital_charging and int(orbital_charge_time * 10) % 2:
         pygame.draw.circle(screen, (255, 200, 50), (player.centerx, player.centery), 70, 3)
         pygame.draw.circle(screen, (255, 200, 50), (player.centerx, player.centery), 55, 1)
-
+    # hack mode cue
+    if hacked_enemy:
+        hack_text = small_font.render("HACK MODE — OVERDRIVE LOCKED", True, RED)
+        screen.blit(hack_text, (10, 240))
     # Enemies & powerups
     for enemy in enemies:
         enemy.draw(screen)
@@ -717,6 +723,23 @@ def draw_window():
         pygame.draw.circle(screen, (255, 100, 100), (cx, cy), 6, 2)
         target_hint = small_font.render("Click to confirm artillery strike", True, RED)
         screen.blit(target_hint, (cx + 16, cy - 8))
+    # Hack targeting visuals (last-chance possession)
+    if hack_mode:
+        mx, my = pygame.mouse.get_pos()
+        cx, cy = mx, my
+
+        # red crosshair
+        pygame.draw.line(screen, RED, (cx - 14, cy), (cx + 14, cy), 3)
+        pygame.draw.line(screen, RED, (cx, cy - 14), (cx, cy + 14), 3)
+        pygame.draw.circle(screen, (255, 80, 80), (cx, cy), 8, 2)
+
+        # subtle scan ring
+        scan_radius = 42 + int(math.sin(pygame.time.get_ticks() * 0.01) * 6)
+        pygame.draw.circle(screen, (255, 60, 60), (cx, cy), scan_radius, 2)
+
+        # center message
+        hack_text = large_font.render("HACK AN ENEMY", True, RED)
+        screen.blit(hack_text, (WIDTH // 2 - hack_text.get_width() // 2, HEIGHT // 2 - 90))
 
     # Overdrive aura: red burning ring (visual + damage region drawn elsewhere)
     if overdrive_active:
@@ -765,6 +788,11 @@ def reset_game():
     global overdrive_points, overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
     global cutter_active, cutter_active_time, cutter_blades
     global artillery_available, artillery_targeting, artillery_pending, artillery_drop_timer
+    global hack_mode, hack_available, hacked_enemy
+
+    hack_mode = False
+    hack_available = True
+    hacked_enemy = None
 
     score = 0
     lives = 3
@@ -821,6 +849,8 @@ def reset_game():
 def main():
     global score, lives, enemy_speed, spawn_rate, game_state, high_score, screen_shake
     global player_shield, player_shield_time, player_invincible, player_invincible_time
+    global support_drone, support_drone_missiles
+    global hacked_enemy, hack_mode, hack_available
     global rapid_fire, rapid_fire_time, rapid_fire_counter
     global orbital_count, orbital_charging, orbital_charge_duration, orbital_charge_time
     global orbital_beam_active, orbital_beam_time, orbital_beam_duration, orbital_beam_width
@@ -828,7 +858,7 @@ def main():
     global overdrive_points, overdrive_ready, overdrive_active, overdrive_timer, overdrive_on_cooldown, overdrive_cd_timer
     global cutter_active, cutter_active_time, cutter_spin_duration, cutter_blades
     global artillery_available, artillery_targeting, artillery_pending, artillery_target_pos, artillery_drop_timer
-
+    
     running = True
 
     while running:
@@ -869,7 +899,13 @@ def main():
                     particles.append(Particle(player.centerx, player.top, random.uniform(-1, 1), -3, lifetime=12, color=(255, 255, 200)))
                 if event.key == pygame.K_p:
                     game_state = PAUSED
-                if event.key == pygame.K_e and overdrive_ready and not overdrive_active and not overdrive_on_cooldown and not artillery_targeting:
+                if (event.key == pygame.K_e and
+                    overdrive_ready and
+                    not overdrive_active and
+                    not overdrive_on_cooldown and
+                    not artillery_targeting and
+                    not hacked_enemy):
+
                     overdrive_active = True
                     overdrive_ready = False
                     overdrive_points = 0
@@ -899,6 +935,31 @@ def main():
                 for _ in range(8):
                     particles.append(Particle(mx + random.uniform(-8,8), my + random.uniform(-8,8), random.uniform(-2,2), random.uniform(-2,2), lifetime=18, color=(255,180,60)))
                 # resume the game (updates continue)
+            # Mouse click handling during HACK MODE
+            if event.type == pygame.MOUSEBUTTONDOWN and hack_mode:
+                mx, my = pygame.mouse.get_pos()
+                for enemy in enemies:
+                    if enemy.rect.collidepoint(mx, my):
+                        hacked_enemy = enemy
+                        hack_mode = False
+                        lives = 1
+                        pygame.mouse.set_visible(False)
+
+                        # move player into hacked enemy
+                        player.center = enemy.rect.center
+                        enemies.remove(enemy)
+
+                        # ---- disable support drone (PART B) ----
+                        support_drone = None
+                        support_drone_missiles.clear()
+                        # ---------------------------------------
+
+                        break
+            #  Hack 
+        if hack_mode:
+            draw_window()
+            continue
+        # ---------------------------
 
         # If we're currently in targeting mode, we must render the frozen frame and skip all updates.
         if artillery_targeting:
@@ -933,6 +994,18 @@ def main():
             if overdrive_cd_timer <= 0:
                 overdrive_on_cooldown = False
                 overdrive_cd_timer = 0.0
+                
+        if hacked_enemy:
+            overdrive_active = True
+            overdrive_ready = False
+            overdrive_on_cooldown = False
+            overdrive_timer = 9999
+        # ----- LOCK GAMEPLAY AT ZERO LIVES -----
+        if lives == 0 and not hacked_enemy and not hack_mode:
+            hack_mode = True
+            hack_available = False
+            pygame.mouse.set_visible(True)
+        # --------------------------------------
 
         # Player movement
         keys = pygame.key.get_pressed()
@@ -951,8 +1024,7 @@ def main():
             moving = True
         if moving:
             spawn_thruster()
-        if keys[pygame.K_t]:   # press T to summon support drone
-            global support_drone
+        if keys[pygame.K_t] and not hacked_enemy:   # press T to summon support drone
             support_drone = SupportDrone()
         if support_drone:
             support_drone.update()
@@ -1075,25 +1147,39 @@ def main():
                             pass
                     else:
                         lives -= 1
+                        lives = max(lives, 0)
                         screen_shake = 5
                         play_sound(hit_sound)
+
                         for _ in range(15):
-                            particles.append(Particle(player.centerx, player.centery, random.uniform(-5, 5), random.uniform(-5, 5)))
+                            particles.append(
+                                Particle(player.centerx, player.centery,
+                                        random.uniform(-5, 5),
+                                        random.uniform(-5, 5))
+                            )
+
                         try:
                             enemies.remove(enemy)
                         except ValueError:
                             pass
+
                         shockwaves.append(Shockwave(player.centerx, player.centery))
-                        if lives <= 0:
+
+                        # ---------- HACK INTERCEPT ----------
+                        if lives == 0 and hack_available and not hacked_enemy:
+                            hack_mode = True
+                            hack_available = False
+                            pygame.mouse.set_visible(True)
+                            continue   # CRITICAL: skip game over
+                        # -----------------------------------
+
+                        # If already hacked and die again → real GAME OVER
+                        if lives == 0 and hacked_enemy:
                             game_state = GAME_OVER
                             if score > high_score:
                                 high_score = score
                                 save_high_score(high_score)
-                            try:
-                                if globals().get('orbital_sound', None):
-                                    globals()['orbital_sound'].stop()
-                            except Exception:
-                                pass
+
 
         # --- Overdrive burning ring damage
         if overdrive_active:
@@ -1131,6 +1217,8 @@ def main():
 
         # Power-up collection
         for powerup in powerups[:]:
+            if hacked_enemy:
+                continue
             if powerup.rect.colliderect(player):
                 if powerup.type == PowerUpType.SHIELD:
                     play_sound(shield_sound or powerup_sound)
@@ -1391,7 +1479,7 @@ def main():
                         particles.append(Particle(player.centerx + random.uniform(-20,20), player.centery + random.uniform(-20,20), random.uniform(-5,5), random.uniform(-5,5), lifetime=30, color=(255,80,20)))
                     shockwaves.append(Shockwave(player.centerx, player.centery))
                     play_sound(hit_sound)
-                    if lives <= 0:
+                    if hacked_enemy and lives <= 0:
                         game_state = GAME_OVER
                         if score > high_score:
                             high_score = score
